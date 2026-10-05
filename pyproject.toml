@@ -1,0 +1,87 @@
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "batch-llm"
+version = "0.1.16"
+description = "Small, crash-safe batch API client for OpenAI and Gemini"
+readme = "README.md"
+license = "MIT"
+authors = ["Caralyn Reisle"]
+packages = [{ include = "batch_llm", from = "src" }]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<4.0"
+openai = ">=1.0"
+google-genai = ">=1.0"
+platformdirs = ">=4.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8"
+pytest-cov = ">=5"
+ruff = ">=0.9"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "--strict-markers --strict-config --cov=batch_llm --cov-report=term-missing --cov-branch"
+
+[tool.coverage.run]
+branch = true
+source = ["batch_llm"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 90
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+extend-select = [
+    "E",   # pycodestyle errors (replaces flake8)
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes (replaces flake8)
+    "I",   # isort (replaces isort)
+    "ANN001",
+    "ANN201",
+    "S",
+    "B",
+    "UP",
+    "RUF",
+    "FURB",
+    "N",
+]
+ignore = [
+    "E501", # line length of 79 characters
+    "E203", # whitespace before : rule https://github.com/psf/black/issues/315
+    "DTZ",
+    "TRY002", # can enable in future
+    "S702", # prone to false positives
+    "S603", # prone to false positives
+    "S608", # prone to false positives
+    "S607", # we don't want to specify full path as we run on different servers
+    "LOG015"
+]
+
+[tool.ruff.format]
+quote-style = "double"
+skip-magic-trailing-comma = true
+
+[tool.ruff.lint.isort]
+known-first-party = ["batch_llm", "tests"]
+split-on-trailing-comma = false
+
+[tool.ruff.lint.flake8-comprehensions]
+allow-dict-calls-with-keyword-arguments = true
+
+[tool.ruff.lint.flake8-annotations]
+suppress-none-returning = true
+
+[tool.ruff.lint.per-file-ignores]
+"test_*.py" = ["ANN", "S101"]
+"tests/**/*.py" = ["ANN", "S101"]

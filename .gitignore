@@ -1,0 +1,10 @@
+dist
+.ruff_cache
+__pycache__
+.coverage
+*.gz
+*.pyc
+tarball_pkg.sh
+.venv
+scripts/migrate_legacy_cache.py
+.pytest_cache

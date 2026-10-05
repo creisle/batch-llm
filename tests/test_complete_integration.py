@@ -1,0 +1,253 @@
+from pathlib import Path
+
+import pytest
+
+import batch_llm.complete as complete_module
+from batch_llm.cache import request_cache_hash
+from batch_llm.models import BatchJob, BatchResult, BatchStatus
+
+
+class MemoryStore:
+    def __init__(self):
+        self.cache = {}
+
+    def cached_responses(self, key):
+        return list(self.cache.get(key, []))
+
+    def add_cached_response(self, key, response, usage=None, *, usage_scope=None, usage_id=None):
+        rows = self.cache.setdefault(key, [])
+        rows.append(
+            BatchResult(
+                f"cache-{len(rows)}",
+                response,
+                usage=usage,
+                usage_scope=usage_scope,
+                usage_id=usage_id,
+            )
+        )
+
+
+class CompleteFakeClient:
+    shared_store = MemoryStore()
+    submitted = []
+    result_factory = None
+
+    def __init__(self, *args, **kwargs):
+        self.store = self.shared_store
+
+    def submit(self, prompts, **kwargs):
+        prompts = list(prompts)
+        self.__class__.submitted.append(prompts)
+        return BatchJob(
+            id=f"job-{len(self.submitted)}",
+            provider="openai",
+            model=kwargs["model"],
+            status=BatchStatus.SUBMITTED,
+            remote_job_id=f"remote-{len(self.submitted)}",
+        )
+
+    def wait(self, job, **kwargs):
+        return BatchJob(
+            id=job.id,
+            provider=job.provider,
+            model=job.model,
+            status=BatchStatus.COMPLETED,
+            remote_job_id=job.remote_job_id,
+        )
+
+    def results(self, job, refresh=False):
+        if type(self).result_factory:
+            return type(self).result_factory(job, self.submitted[-1])
+        return [
+            BatchResult(
+                f"request-{i}",
+                {"choices": [{"message": {"content": f"out:{prompt}"}}], "usage": {"total_tokens": i + 1}},
+                usage={"total_tokens": i + 1},
+                usage_scope="request",
+                usage_id=f"{job.id}:request-{i}",
+            )
+            for i, prompt in enumerate(self.submitted[-1])
+        ]
+
+
+@pytest.fixture(autouse=True)
+def reset_fake_client(monkeypatch):
+    CompleteFakeClient.shared_store = MemoryStore()
+    CompleteFakeClient.submitted = []
+    CompleteFakeClient.result_factory = None
+    monkeypatch.setattr(complete_module, "BatchClient", CompleteFakeClient)
+
+
+def test_partial_cache_hit_submits_only_missing_samples(tmp_path: Path):
+    body = {"model": "m", "messages": [{"role": "user", "content": "a"}], "temperature": 0}
+    key = request_cache_hash("openai", body)
+    CompleteFakeClient.shared_store.add_cached_response(
+        key,
+        {"choices": [{"message": {"content": "cached-a"}}], "usage": {"total_tokens": 3}},
+        {"total_tokens": 3},
+        usage_scope="request",
+        usage_id="old:request-0",
+    )
+
+    rows = complete_module.complete_prompts(
+        ["a", "b"],
+        model="m",
+        generation_config={"temperature": 0},
+        min_repeat=2,
+        provider="openai",
+        api_key_var="OPENAI_API_KEY",
+        cache_dir=tmp_path,
+    )
+    assert CompleteFakeClient.submitted == [["a", "b", "b"]]
+    assert [(r["prompt"], r["repeat_index"]) for r in rows] == [
+        ("a", 0), ("a", 1), ("b", 0), ("b", 1)
+    ]
+    assert rows[0]["generated_text"] == "cached-a"
+
+
+def test_second_identical_call_is_fully_cached(tmp_path: Path):
+    kwargs = dict(
+        model="m",
+        generation_config={"temperature": 0},
+        provider="openai",
+        api_key_var="OPENAI_API_KEY",
+        cache_dir=tmp_path,
+    )
+    first = complete_module.complete_prompts(["a", "b"], **kwargs)
+    assert len(CompleteFakeClient.submitted) == 1
+    second = complete_module.complete_prompts(["a", "b"], **kwargs)
+    assert len(CompleteFakeClient.submitted) == 1
+    assert [r["generated_text"] for r in first] == [r["generated_text"] for r in second]
+
+
+def test_same_prompt_changed_config_does_not_use_cache(tmp_path: Path):
+    base = dict(model="m", provider="openai", api_key_var="OPENAI_API_KEY", cache_dir=tmp_path)
+    complete_module.complete_prompts("a", generation_config={"temperature": 0}, **base)
+    complete_module.complete_prompts("a", generation_config={"temperature": 1}, **base)
+    assert CompleteFakeClient.submitted == [["a"], ["a"]]
+
+
+def test_same_prompt_changed_model_does_not_use_cache(tmp_path: Path):
+    base = dict(provider="openai", api_key_var="OPENAI_API_KEY", cache_dir=tmp_path)
+    complete_module.complete_prompts("a", model="m1", generation_config={}, **base)
+    complete_module.complete_prompts("a", model="m2", generation_config={}, **base)
+    assert CompleteFakeClient.submitted == [["a"], ["a"]]
+
+
+def test_provider_result_count_mismatch_raises(tmp_path: Path):
+    CompleteFakeClient.result_factory = lambda job, prompts: []
+    with pytest.raises(RuntimeError, match="returned 0 results for 1 requests"):
+        complete_module.complete_prompts(
+            "a",
+            model="m",
+            generation_config={},
+            provider="openai",
+            api_key_var="OPENAI_API_KEY",
+            cache_dir=tmp_path,
+        )
+
+
+def test_empty_input_returns_without_client(monkeypatch):
+    class ExplodingClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("client should not be constructed")
+
+    monkeypatch.setattr(complete_module, "BatchClient", ExplodingClient)
+    assert complete_module.complete_prompts([], model="m", generation_config={}) == []
+
+
+def test_invalid_provider_and_wrong_key_var_fail_before_api_use(tmp_path: Path):
+    with pytest.raises(ValueError, match="provider must"):
+        complete_module.complete_prompts(
+            "a", model="m", generation_config={}, provider="other", cache_dir=tmp_path
+        )
+    with pytest.raises(ValueError, match="requires OPENAI_API_KEY"):
+        complete_module.complete_prompts(
+            "a",
+            model="m",
+            generation_config={},
+            provider="openai",
+            api_key_var="GEMINI_API_KEY",
+            cache_dir=tmp_path,
+        )
+
+
+def test_overlapping_batches_submit_only_uncached_prompts(tmp_path: Path):
+    common = [f"prompt-{i}" for i in range(50, 100)]
+    first_prompts = [f"prompt-{i}" for i in range(100)]
+    second_prompts = common + [f"prompt-{i}" for i in range(100, 150)]
+
+    kwargs = dict(
+        model="m",
+        generation_config={"temperature": 0},
+        provider="openai",
+        api_key_var="OPENAI_API_KEY",
+        cache_dir=tmp_path,
+    )
+
+    first_rows = complete_module.complete_prompts(first_prompts, **kwargs)
+    second_rows = complete_module.complete_prompts(second_prompts, **kwargs)
+
+    assert CompleteFakeClient.submitted[0] == first_prompts
+    assert CompleteFakeClient.submitted[1] == [f"prompt-{i}" for i in range(100, 150)]
+    assert len(CompleteFakeClient.submitted[1]) == 50
+
+    assert [row["prompt"] for row in first_rows] == first_prompts
+    assert [row["prompt"] for row in second_rows] == second_prompts
+    assert [row["generated_text"] for row in second_rows] == [
+        f"out:{prompt}" for prompt in second_prompts
+    ]
+
+
+
+def test_duplicate_input_prompts_submit_only_unique_prompts(tmp_path: Path):
+    prompts = ["alpha", "beta", "alpha", "gamma", "beta", "alpha"]
+
+    rows = complete_module.complete_prompts(
+        prompts,
+        model="m",
+        generation_config={"temperature": 0},
+        provider="openai",
+        api_key_var="OPENAI_API_KEY",
+        cache_dir=tmp_path,
+    )
+
+    assert CompleteFakeClient.submitted == [["alpha", "beta", "gamma"]]
+    assert [row["prompt"] for row in rows] == prompts
+    assert [row["generated_text"] for row in rows] == [f"out:{prompt}" for prompt in prompts]
+
+def test_output_preserves_all_input_fields_and_adds_generated_text(tmp_path: Path):
+    inputs = [
+        {
+            "id": "sample-a",
+            "prompt": "alpha",
+            "label": "case-a",
+            "score": 1.25,
+            "metadata": {"source": "test", "nested": [1, 2, 3]},
+            "enabled": True,
+        },
+        {
+            "id": "sample-b",
+            "prompt": "beta",
+            "label": None,
+            "score": 0,
+            "metadata": {"source": "other"},
+            "enabled": False,
+        },
+    ]
+
+    rows = complete_module.complete_prompts(
+        inputs,
+        model="m",
+        generation_config={"temperature": 0},
+        provider="openai",
+        api_key_var="OPENAI_API_KEY",
+        cache_dir=tmp_path,
+    )
+
+    assert len(rows) == len(inputs)
+    for input_row, output_row in zip(inputs, rows):
+        for field, value in input_row.items():
+            assert field in output_row
+            assert output_row[field] == value
+        assert output_row["generated_text"] == f"out:{input_row['prompt']}"

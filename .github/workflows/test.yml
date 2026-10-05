@@ -1,0 +1,103 @@
+# This workflow installs dependencies, checks formatting, and runs tests.
+name: build
+
+on:
+  push:
+    branches-ignore:
+      - badges
+
+permissions:
+  contents: write
+
+# A newer push supersedes an older build of the same branch.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11']
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          pip install poetry
+          poetry install
+
+      - name: Check with ruff
+        run: |
+          pip install ruff
+          ruff format --check src tests
+
+      - name: Full Tests with pytest
+        run: |
+          pip list
+          poetry run pytest --cov src --cov-report term --cov-report=json
+
+      - name: Extract Coverage Percentage
+        if: matrix.python-version == '3.11'
+        run: |
+          COVERAGE=$(python -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered']))")
+          echo "COVERAGE=$COVERAGE" >> "$GITHUB_ENV"
+
+      - name: Generate Coverage Badge
+        if: matrix.python-version == '3.11'
+        run: |
+          mkdir -p "$RUNNER_TEMP/coverage-badge"
+          npx -y generated-badges --label coverage --status "${COVERAGE}%" --color green --output "$RUNNER_TEMP/coverage-badge/coverage.svg"
+
+      - name: Publish Coverage Badge
+        if: matrix.python-version == '3.11'
+        env:
+          SOURCE_BRANCH: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          # An isolated worktree keeps badge commits out of the source branch.
+          badge_worktree="$RUNNER_TEMP/badges-worktree"
+          git worktree add --detach "$badge_worktree" HEAD
+          trap 'git -C "$GITHUB_WORKSPACE" worktree remove --force "$badge_worktree"' EXIT
+          cd "$badge_worktree"
+          git switch --orphan "badges-update-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          badge_path="badges/$SOURCE_BRANCH/coverage.svg"
+
+          # Rebuild the commit on the latest badges branch after a push race.
+          for attempt in 1 2 3 4 5; do
+            if git ls-remote --exit-code --heads origin refs/heads/badges > /dev/null; then
+              git fetch origin refs/heads/badges
+              git reset --hard FETCH_HEAD
+            else
+              status=$?
+              if [ "$status" -ne 2 ]; then
+                exit "$status"
+              fi
+            fi
+
+            mkdir -p "$(dirname "$badge_path")"
+            cp "$RUNNER_TEMP/coverage-badge/coverage.svg" "$badge_path"
+            git add -- "$badge_path"
+            if git diff --cached --quiet; then
+              echo "Coverage badge is unchanged."
+              exit 0
+            fi
+            git commit -m "chore: update coverage badge for $SOURCE_BRANCH"
+            if git push origin HEAD:refs/heads/badges; then
+              exit 0
+            fi
+            echo "Badge push failed; retrying ($attempt/5)."
+          done
+
+          echo "Unable to publish coverage badge after five attempts." >&2
+          exit 1
