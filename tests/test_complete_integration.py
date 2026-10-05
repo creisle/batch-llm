@@ -251,3 +251,65 @@ def test_output_preserves_all_input_fields_and_adds_generated_text(tmp_path: Pat
             assert field in output_row
             assert output_row[field] == value
         assert output_row["generated_text"] == f"out:{input_row['prompt']}"
+
+@pytest.mark.parametrize(
+    ("prompts_factory", "dataset_text_field"),
+    [
+        (lambda: "alpha", "prompt"),
+        (lambda: ["alpha", "beta"], "prompt"),
+        (lambda: ("alpha", "beta"), "prompt"),
+        (lambda: (prompt for prompt in ["alpha", "beta"]), "prompt"),
+        (lambda: [{"id": 1, "prompt": "alpha"}, {"id": 2, "prompt": "beta"}], "prompt"),
+        (
+            lambda: (
+                row
+                for row in [
+                    {"id": 1, "prompt": "alpha"},
+                    {"id": 2, "prompt": "beta"},
+                ]
+            ),
+            "prompt",
+        ),
+        (lambda: [{"id": 1, "text": "alpha"}, {"id": 2, "text": "beta"}], "text"),
+    ],
+)
+def test_all_supported_input_formats_return_list_of_dicts(
+    tmp_path: Path, prompts_factory, dataset_text_field: str
+):
+    rows = complete_module.complete_prompts(
+        prompts_factory(),
+        model="m",
+        generation_config={"temperature": 0},
+        dataset_text_field=dataset_text_field,
+        provider="openai",
+        api_key_var="OPENAI_API_KEY",
+        cache_dir=tmp_path,
+    )
+
+    assert isinstance(rows, list)
+    assert rows
+    assert all(isinstance(row, dict) for row in rows)
+    assert all("generated_text" in row for row in rows)
+
+@pytest.mark.parametrize(
+    ("prompts_factory", "expected_prompts"),
+    [
+        (lambda: "alpha", ["alpha"]),
+        (lambda: ["alpha", "beta"], ["alpha", "beta"]),
+        (lambda: ("alpha", "beta"), ["alpha", "beta"]),
+        (lambda: (prompt for prompt in ["alpha", "beta"]), ["alpha", "beta"]),
+    ],
+)
+def test_string_inputs_return_prompt_field(tmp_path: Path, prompts_factory, expected_prompts):
+    rows = complete_module.complete_prompts(
+        prompts_factory(),
+        model="m",
+        generation_config={"temperature": 0},
+        provider="openai",
+        api_key_var="OPENAI_API_KEY",
+        cache_dir=tmp_path,
+    )
+
+    assert isinstance(rows, list)
+    assert all(isinstance(row, dict) for row in rows)
+    assert [row["prompt"] for row in rows] == expected_prompts
