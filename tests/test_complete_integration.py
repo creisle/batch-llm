@@ -64,7 +64,10 @@ class CompleteFakeClient:
         return [
             BatchResult(
                 f"request-{i}",
-                {"choices": [{"message": {"content": f"out:{prompt}"}}], "usage": {"total_tokens": i + 1}},
+                {
+                    "choices": [{"message": {"content": f"out:{prompt}"}}],
+                    "usage": {"total_tokens": i + 1},
+                },
                 usage={"total_tokens": i + 1},
                 usage_scope="request",
                 usage_id=f"{job.id}:request-{i}",
@@ -103,7 +106,10 @@ def test_partial_cache_hit_submits_only_missing_samples(tmp_path: Path):
     )
     assert CompleteFakeClient.submitted == [["a", "b", "b"]]
     assert [(r["prompt"], r["repeat_index"]) for r in rows] == [
-        ("a", 0), ("a", 1), ("b", 0), ("b", 1)
+        ("a", 0),
+        ("a", 1),
+        ("b", 0),
+        ("b", 1),
     ]
     assert rows[0]["generated_text"] == "cached-a"
 
@@ -159,10 +165,7 @@ def test_completed_batch_retries_until_results_are_available(tmp_path: Path, mon
         if calls["count"] == 1:
             return []
         return [
-            BatchResult(
-                f"request-{i}",
-                {"choices": [{"message": {"content": f"out:{prompt}"}}]},
-            )
+            BatchResult(f"request-{i}", {"choices": [{"message": {"content": f"out:{prompt}"}}]})
             for i, prompt in enumerate(prompts)
         ]
 
@@ -234,7 +237,6 @@ def test_overlapping_batches_submit_only_uncached_prompts(tmp_path: Path):
     ]
 
 
-
 def test_duplicate_input_prompts_submit_only_unique_prompts(tmp_path: Path):
     prompts = ["alpha", "beta", "alpha", "gamma", "beta", "alpha"]
 
@@ -250,6 +252,7 @@ def test_duplicate_input_prompts_submit_only_unique_prompts(tmp_path: Path):
     assert CompleteFakeClient.submitted == [["alpha", "beta", "gamma"]]
     assert [row["prompt"] for row in rows] == prompts
     assert [row["generated_text"] for row in rows] == [f"out:{prompt}" for prompt in prompts]
+
 
 def test_output_preserves_all_input_fields_and_adds_generated_text(tmp_path: Path):
     inputs = [
@@ -287,6 +290,7 @@ def test_output_preserves_all_input_fields_and_adds_generated_text(tmp_path: Pat
             assert output_row[field] == value
         assert output_row["generated_text"] == f"out:{input_row['prompt']}"
 
+
 @pytest.mark.parametrize(
     ("prompts_factory", "dataset_text_field"),
     [
@@ -296,13 +300,7 @@ def test_output_preserves_all_input_fields_and_adds_generated_text(tmp_path: Pat
         (lambda: (prompt for prompt in ["alpha", "beta"]), "prompt"),
         (lambda: [{"id": 1, "prompt": "alpha"}, {"id": 2, "prompt": "beta"}], "prompt"),
         (
-            lambda: (
-                row
-                for row in [
-                    {"id": 1, "prompt": "alpha"},
-                    {"id": 2, "prompt": "beta"},
-                ]
-            ),
+            lambda: (row for row in [{"id": 1, "prompt": "alpha"}, {"id": 2, "prompt": "beta"}]),
             "prompt",
         ),
         (lambda: [{"id": 1, "text": "alpha"}, {"id": 2, "text": "beta"}], "text"),
@@ -325,6 +323,7 @@ def test_all_supported_input_formats_return_list_of_dicts(
     assert rows
     assert all(isinstance(row, dict) for row in rows)
     assert all("generated_text" in row for row in rows)
+
 
 @pytest.mark.parametrize(
     ("prompts_factory", "expected_prompts"),
@@ -381,8 +380,7 @@ def test_provider_error_has_readable_message_and_is_logged(tmp_path: Path, caplo
         "message": "max_tokens is too large",
     }
     assert rows[0]["error_message"] == (
-        "code=invalid_request_error, type=invalid_request_error, "
-        "message=max_tokens is too large"
+        "code=invalid_request_error, type=invalid_request_error, message=max_tokens is too large"
     )
     assert "request=request-0" in caplog.text
     assert "max_tokens is too large" in caplog.text

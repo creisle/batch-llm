@@ -28,16 +28,11 @@ def test_normalize_single_string():
 
 
 def test_normalize_strings():
-    assert _normalize_inputs(["a", "b"], "prompt") == [
-        {"prompt": "a"},
-        {"prompt": "b"},
-    ]
+    assert _normalize_inputs(["a", "b"], "prompt") == [{"prompt": "a"}, {"prompt": "b"}]
 
 
 def test_normalize_mappings_preserves_fields():
-    assert _normalize_inputs([{"id": 1, "text": "hello"}], "text") == [
-        {"id": 1, "text": "hello"}
-    ]
+    assert _normalize_inputs([{"id": 1, "text": "hello"}], "text") == [{"id": 1, "text": "hello"}]
 
 
 def test_normalize_requires_string_prompt():
@@ -63,6 +58,7 @@ def test_complete_prompts_preserves_input_order_duplicates_and_usage(monkeypatch
             self, key, response, usage=None, *, usage_scope=None, usage_id=None
         ):
             from batch_llm.models import BatchResult
+
             self.rows.setdefault(key, []).append(
                 BatchResult(
                     f"cache-{len(self.rows.get(key, []))}",
@@ -118,11 +114,7 @@ def test_complete_prompts_preserves_input_order_duplicates_and_usage(monkeypatch
 
     monkeypatch.setattr(complete_module, "BatchClient", FakeClient)
     rows = complete_module.complete_prompts(
-        [
-            {"id": 10, "prompt": "b"},
-            {"id": 11, "prompt": "a"},
-            {"id": 12, "prompt": "b"},
-        ],
+        [{"id": 10, "prompt": "b"}, {"id": 11, "prompt": "a"}, {"id": 12, "prompt": "b"}],
         model="m",
         generation_config={},
         provider="openai",
@@ -229,7 +221,15 @@ def test_wait_interval_uses_env_when_not_explicit(monkeypatch, tmp_path):
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
-            self.store = type("Store", (), {"ensure_cache_request": lambda self, *args, **kwargs: None, "cached_responses": lambda self, key: [], "add_cached_response": lambda self, *args, **kwargs: None})()
+            self.store = type(
+                "Store",
+                (),
+                {
+                    "ensure_cache_request": lambda self, *args, **kwargs: None,
+                    "cached_responses": lambda self, key: [],
+                    "add_cached_response": lambda self, *args, **kwargs: None,
+                },
+            )()
 
         def submit(self, *args, **kwargs):
             return type("Job", (), {"id": "job", "completed": False})()
@@ -243,22 +243,23 @@ def test_wait_interval_uses_env_when_not_explicit(monkeypatch, tmp_path):
             return job
 
         def results(self, job, refresh=False):
-            return [type("Result", (), {
-                "response": {"choices": [{"message": {"content": "ok"}}]},
-                "error": None,
-                "usage": None,
-                "usage_scope": None,
-                "usage_id": None,
-                "custom_id": "0",
-            })()]
+            return [
+                type(
+                    "Result",
+                    (),
+                    {
+                        "response": {"choices": [{"message": {"content": "ok"}}]},
+                        "error": None,
+                        "usage": None,
+                        "usage_scope": None,
+                        "usage_id": None,
+                        "custom_id": "0",
+                    },
+                )()
+            ]
 
     monkeypatch.setattr("batch_llm.complete.BatchClient", FakeClient)
-    complete_prompts(
-        "hello",
-        model="gpt-test",
-        generation_config={},
-        cache_dir=tmp_path,
-    )
+    complete_prompts("hello", model="gpt-test", generation_config={}, cache_dir=tmp_path)
     assert seen["poll_interval"] == 7.5
 
 
@@ -268,7 +269,15 @@ def test_explicit_wait_interval_overrides_env(monkeypatch, tmp_path):
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
-            self.store = type("Store", (), {"ensure_cache_request": lambda self, *args, **kwargs: None, "cached_responses": lambda self, key: [], "add_cached_response": lambda self, *args, **kwargs: None})()
+            self.store = type(
+                "Store",
+                (),
+                {
+                    "ensure_cache_request": lambda self, *args, **kwargs: None,
+                    "cached_responses": lambda self, key: [],
+                    "add_cached_response": lambda self, *args, **kwargs: None,
+                },
+            )()
 
         def submit(self, *args, **kwargs):
             return type("Job", (), {"id": "job", "completed": False})()
@@ -282,22 +291,24 @@ def test_explicit_wait_interval_overrides_env(monkeypatch, tmp_path):
             return job
 
         def results(self, job, refresh=False):
-            return [type("Result", (), {
-                "response": {"choices": [{"message": {"content": "ok"}}]},
-                "error": None,
-                "usage": None,
-                "usage_scope": None,
-                "usage_id": None,
-                "custom_id": "0",
-            })()]
+            return [
+                type(
+                    "Result",
+                    (),
+                    {
+                        "response": {"choices": [{"message": {"content": "ok"}}]},
+                        "error": None,
+                        "usage": None,
+                        "usage_scope": None,
+                        "usage_id": None,
+                        "custom_id": "0",
+                    },
+                )()
+            ]
 
     monkeypatch.setattr("batch_llm.complete.BatchClient", FakeClient)
     complete_prompts(
-        "hello",
-        model="gpt-test",
-        generation_config={},
-        wait_interval_s=2,
-        cache_dir=tmp_path,
+        "hello", model="gpt-test", generation_config={}, wait_interval_s=2, cache_dir=tmp_path
     )
     assert seen["poll_interval"] == 2
 
@@ -321,7 +332,6 @@ def test_load_generation_config_mapping_with_absolute_system_prompt_file(tmp_pat
     assert config["system_prompt_file"] == str(prompt.resolve())
 
 
-
 def test_load_generation_config_file_respects_absolute_system_prompt_file(tmp_path: Path):
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
@@ -332,12 +342,7 @@ def test_load_generation_config_file_respects_absolute_system_prompt_file(tmp_pa
     config_dir.mkdir()
     config_path = config_dir / "generation.json"
     config_path.write_text(
-        json.dumps(
-            {
-                "generation": {"temperature": 0},
-                "system_prompt_file": str(prompt.resolve()),
-            }
-        ),
+        json.dumps({"generation": {"temperature": 0}, "system_prompt_file": str(prompt.resolve())}),
         encoding="utf-8",
     )
 
@@ -346,6 +351,7 @@ def test_load_generation_config_file_respects_absolute_system_prompt_file(tmp_pa
     assert config["generation"] == {"temperature": 0}
     assert config["system_prompt"] == "absolute from config"
     assert config["system_prompt_file"] == str(prompt.resolve())
+
 
 def test_load_generation_config_mapping_relative_system_prompt_file_rejected():
     with pytest.raises(
@@ -372,9 +378,7 @@ def test_load_generation_config_shorthand_with_system_prompt_file(tmp_path: Path
     prompt = tmp_path / "system.md"
     prompt.write_text("be brief\n", encoding="utf-8")
 
-    config = load_generation_config(
-        {"system_prompt_file": str(prompt), "temperature": 0}
-    )
+    config = load_generation_config({"system_prompt_file": str(prompt), "temperature": 0})
 
     assert config["generation"] == {"temperature": 0}
     assert config["system_prompt"] == "be brief"
@@ -386,11 +390,7 @@ def test_load_generation_config_rejects_system_prompt_and_file(tmp_path: Path):
 
     with pytest.raises(ValueError, match="mutually exclusive"):
         load_generation_config(
-            {
-                "generation": {},
-                "system_prompt": "inline prompt",
-                "system_prompt_file": str(prompt),
-            }
+            {"generation": {}, "system_prompt": "inline prompt", "system_prompt_file": str(prompt)}
         )
 
 
@@ -406,22 +406,13 @@ def test_load_generation_config_merges_nested_and_top_level_generation_options()
 
     assert config == {
         "system_prompt": "be brief",
-        "generation": {
-            "temperature": 0,
-            "max_tokens": 20,
-            "min_new_tokens": 5,
-        },
+        "generation": {"temperature": 0, "max_tokens": 20, "min_new_tokens": 5},
     }
 
 
 def test_load_generation_config_rejects_duplicate_generation_option_locations():
     with pytest.raises(ValueError, match="specified both at top level and inside 'generation'"):
-        load_generation_config(
-            {
-                "generation": {"temperature": 0},
-                "temperature": 1,
-            }
-        )
+        load_generation_config({"generation": {"temperature": 0}, "temperature": 1})
 
 
 def test_system_prompt_cache_identity_uses_resolved_content_not_file_path(tmp_path: Path):
@@ -479,9 +470,9 @@ def test_batch_job_hash_uses_resolved_system_prompt_not_file_path(tmp_path: Path
             )
         ]
 
-    assert BatchClient._hash_request("openai", "model-a", requests(cfg_a)) == BatchClient._hash_request(
-        "openai", "model-a", requests(cfg_b)
-    )
+    assert BatchClient._hash_request(
+        "openai", "model-a", requests(cfg_a)
+    ) == BatchClient._hash_request("openai", "model-a", requests(cfg_b))
 
 
 def test_complete_prompts_warns_for_ignored_generation_options(monkeypatch, tmp_path):
@@ -501,14 +492,26 @@ def test_complete_prompts_warns_for_ignored_generation_options(monkeypatch, tmp_
 
         def submit(self, prompts, **kwargs):
             from types import SimpleNamespace
-            return SimpleNamespace(id="job", remote_job_id="remote", completed=True, status=SimpleNamespace(value="completed"), error=None)
+
+            return SimpleNamespace(
+                id="job",
+                remote_job_id="remote",
+                completed=True,
+                status=SimpleNamespace(value="completed"),
+                error=None,
+            )
 
         def wait(self, job, **kwargs):
             return job
 
         def results(self, job, refresh=False):
             from batch_llm.models import BatchResult
-            return [BatchResult(custom_id="request-0", response={"choices": [{"message": {"content": "ok"}}]})]
+
+            return [
+                BatchResult(
+                    custom_id="request-0", response={"choices": [{"message": {"content": "ok"}}]}
+                )
+            ]
 
     monkeypatch.setattr("batch_llm.complete.BatchClient", FakeClient)
     monkeypatch.setenv("OPENAI_API_KEY", "x")

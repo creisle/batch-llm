@@ -157,7 +157,11 @@ def test_openai_results_preserve_per_request_usage():
                     "response": {
                         "body": {
                             "choices": [{"message": {"content": "B"}}],
-                            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+                            "usage": {
+                                "prompt_tokens": 5,
+                                "completion_tokens": 2,
+                                "total_tokens": 7,
+                            },
                         }
                     },
                     "error": None,
@@ -169,7 +173,11 @@ def test_openai_results_preserve_per_request_usage():
                     "response": {
                         "body": {
                             "choices": [{"message": {"content": "A"}}],
-                            "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+                            "usage": {
+                                "prompt_tokens": 4,
+                                "completion_tokens": 1,
+                                "total_tokens": 5,
+                            },
                         }
                     },
                     "error": None,
@@ -216,11 +224,7 @@ def test_gemini_create_and_reconcile_marker():
     provider = GeminiProvider(client=client)
     assert provider.create(job_id="abc", model="gemini-test", file_id="files/input") == "batches/1"
     assert client.batches.created == [
-        {
-            "model": "gemini-test",
-            "src": "files/input",
-            "config": {"display_name": "batch-llm-abc"},
-        }
+        {"model": "gemini-test", "src": "files/input", "config": {"display_name": "batch-llm-abc"}}
     ]
     client.batches.listed = [SimpleNamespace(name="batches/2", display_name="batch-llm-abc")]
     assert provider.find_created_job(job_id="abc") == "batches/2"
@@ -232,7 +236,11 @@ def test_gemini_results_preserve_per_request_usage():
             "key": "request-0",
             "response": {
                 "candidates": [{"content": {"parts": [{"text": "hello"}]}}],
-                "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 2, "totalTokenCount": 5},
+                "usageMetadata": {
+                    "promptTokenCount": 3,
+                    "candidatesTokenCount": 2,
+                    "totalTokenCount": 5,
+                },
             },
         }
     ).encode()
@@ -329,9 +337,7 @@ def test_openai_results_include_error_file_rows():
 
     client = OpenAIClient()
     client.files = Files()
-    client.batches.jobs["batch"] = SimpleNamespace(
-        output_file_id="output", error_file_id="errors"
-    )
+    client.batches.jobs["batch"] = SimpleNamespace(output_file_id="output", error_file_id="errors")
     rows = OpenAIProvider(client=client).results("batch")
     assert [row.custom_id for row in rows] == ["request-0", "request-1"]
     assert rows[0].response["choices"][0]["message"]["content"] == "ok"
@@ -358,9 +364,7 @@ def test_openai_results_surface_error_from_response_body():
         }
     ).encode()
     client = OpenAIClient(payload)
-    client.batches.jobs["batch-1"] = SimpleNamespace(
-        output_file_id="output", error_file_id=None
-    )
+    client.batches.jobs["batch-1"] = SimpleNamespace(output_file_id="output", error_file_id=None)
     provider = OpenAIProvider(client=client)
     rows = provider.results("batch-1")
     assert len(rows) == 1
@@ -414,7 +418,4 @@ def test_gemini_request_filters_local_generation_options_and_maps_max_new_tokens
             "temperature": 0,
         }
     )
-    assert request["generation_config"] == {
-        "maxOutputTokens": 100,
-        "temperature": 0,
-    }
+    assert request["generation_config"] == {"maxOutputTokens": 100, "temperature": 0}

@@ -56,8 +56,7 @@ def test_concurrent_cache_writes_get_unique_contiguous_sample_indices(tmp_path: 
     start = ctx.Event()
     queue = ctx.Queue()
     processes = [
-        ctx.Process(target=_cache_worker, args=(str(db), start, queue, i))
-        for i in range(12)
+        ctx.Process(target=_cache_worker, args=(str(db), start, queue, i)) for i in range(12)
     ]
     for process in processes:
         process.start()

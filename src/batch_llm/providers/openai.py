@@ -87,10 +87,7 @@ class OpenAIProvider(Provider):
         # Successful and failed requests may be split across output and error
         # files. Read both so a completed batch always maps back to every
         # request that the provider reported.
-        file_ids = [
-            getattr(batch, "output_file_id", None),
-            getattr(batch, "error_file_id", None),
-        ]
+        file_ids = [getattr(batch, "output_file_id", None), getattr(batch, "error_file_id", None)]
         for file_id in dict.fromkeys(file_id for file_id in file_ids if file_id):
             content = self.client.files.content(file_id).content
             for line in content.decode("utf-8").splitlines():

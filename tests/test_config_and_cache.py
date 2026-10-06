@@ -34,8 +34,7 @@ def test_generated_text_openai_and_gemini():
     assert _generated_text({"choices": [{"message": {"content": "hello"}}]}, "openai") == "hello"
     assert (
         _generated_text(
-            {"candidates": [{"content": {"parts": [{"text": "hel"}, {"text": "lo"}]}}]},
-            "gemini",
+            {"candidates": [{"content": {"parts": [{"text": "hel"}, {"text": "lo"}]}}]}, "gemini"
         )
         == "hello"
     )
@@ -78,7 +77,13 @@ def test_ignored_generation_options_do_not_change_openai_cache_identity():
         "messages": [{"role": "user", "content": "hello"}],
         "temperature": 0,
     }
-    ignored = {**base, "min_new_tokens": 5, "do_sample": False, "use_cache": True, "truncation": True}
+    ignored = {
+        **base,
+        "min_new_tokens": 5,
+        "do_sample": False,
+        "use_cache": True,
+        "truncation": True,
+    }
 
     assert request_cache_hash("openai", provider.cache_identity_body(base)) == request_cache_hash(
         "openai", provider.cache_identity_body(ignored)
@@ -89,10 +94,7 @@ def test_translated_generation_option_uses_effective_openai_cache_identity():
     from batch_llm.providers.openai import OpenAIProvider
 
     provider = object.__new__(OpenAIProvider)
-    shared = {
-        "model": "gpt-test",
-        "messages": [{"role": "user", "content": "hello"}],
-    }
+    shared = {"model": "gpt-test", "messages": [{"role": "user", "content": "hello"}]}
     alias = {**shared, "max_new_tokens": 123}
     native = {**shared, "max_completion_tokens": 123}
 

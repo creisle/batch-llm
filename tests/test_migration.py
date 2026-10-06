@@ -36,10 +36,7 @@ def test_migrate_legacy_cache_splits_choices_without_double_counting_usage(tmp_p
         "client.base_url": "https://api.openai.com/v1/",
     }
     response = {
-        "choices": [
-            {"message": {"content": "one"}},
-            {"message": {"content": "two"}},
-        ],
+        "choices": [{"message": {"content": "one"}}, {"message": {"content": "two"}}],
         "usage": {"prompt_tokens": 5, "completion_tokens": 4, "total_tokens": 9},
     }
     conn.execute(

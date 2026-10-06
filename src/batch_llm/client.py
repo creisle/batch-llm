@@ -46,9 +46,11 @@ class BatchClient:
             name = provider.lower()
             if name == "openai":
                 from .providers.openai import OpenAIProvider
+
                 self.provider = OpenAIProvider(api_key=api_key)
             elif name == "gemini":
                 from .providers.gemini import GeminiProvider
+
                 self.provider = GeminiProvider(api_key=api_key)
             else:
                 raise ValueError("provider must be 'openai', 'gemini', or a Provider instance")
@@ -84,8 +86,7 @@ class BatchClient:
             requests.append((f"request-{i}", body))
 
         identity_requests = [
-            (custom_id, self.provider.cache_identity_body(body))
-            for custom_id, body in requests
+            (custom_id, self.provider.cache_identity_body(body)) for custom_id, body in requests
         ]
         request_hash = self._hash_request(self.provider.name, model, identity_requests)
         job_id = request_hash[:32]
@@ -133,11 +134,7 @@ class BatchClient:
         return self.store.get_job(job.id)
 
     def wait(
-        self,
-        job_or_id: BatchJob | str,
-        *,
-        poll_interval: float = 30,
-        timeout: float | None = None,
+        self, job_or_id: BatchJob | str, *, poll_interval: float = 30, timeout: float | None = None
     ) -> BatchJob:
         job_id = job_or_id.id if isinstance(job_or_id, BatchJob) else job_or_id
         started = time.monotonic()
@@ -166,7 +163,9 @@ class BatchClient:
     def get(self, job_id: str) -> BatchJob:
         return self.store.get_job(job_id)
 
-    def retry_uncertain_submission(self, job_or_id: BatchJob | str, *, force: bool = False) -> BatchJob:
+    def retry_uncertain_submission(
+        self, job_or_id: BatchJob | str, *, force: bool = False
+    ) -> BatchJob:
         """Retry a job stuck in SUBMITTING.
 
         First reconciles against remote jobs. A new batch is created only when
@@ -218,16 +217,8 @@ class BatchClient:
         # A crash after this state transition may have created the remote job.
         # Recovery must reconcile first and must never blindly create again.
         self.store.update_job(job.id, status=BatchStatus.SUBMITTING)
-        remote_job_id = self.provider.create(
-            job_id=job.id,
-            model=job.model,
-            file_id=remote_file_id,
-        )
-        self.store.update_job(
-            job.id,
-            remote_job_id=remote_job_id,
-            status=BatchStatus.SUBMITTED,
-        )
+        remote_job_id = self.provider.create(job_id=job.id, model=job.model, file_id=remote_file_id)
+        self.store.update_job(job.id, remote_job_id=remote_job_id, status=BatchStatus.SUBMITTED)
         return self.store.get_job(job.id)
 
     @contextmanager
@@ -255,23 +246,11 @@ class BatchClient:
             return job
         remote_job_id = self.provider.find_created_job(job_id=job.id)
         if remote_job_id:
-            self.store.update_job(
-                job.id,
-                remote_job_id=remote_job_id,
-                status=BatchStatus.SUBMITTED,
-            )
+            self.store.update_job(job.id, remote_job_id=remote_job_id, status=BatchStatus.SUBMITTED)
         return self.store.get_job(job.id)
 
     @staticmethod
-    def _hash_request(
-        provider: str,
-        model: str,
-        requests: list[tuple[str, dict[str, Any]]],
-    ) -> str:
-        payload = {
-            "provider": provider,
-            "model": model,
-            "requests": requests,
-        }
+    def _hash_request(provider: str, model: str, requests: list[tuple[str, dict[str, Any]]]) -> str:
+        payload = {"provider": provider, "model": model, "requests": requests}
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()

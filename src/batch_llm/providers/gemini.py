@@ -29,24 +29,19 @@ class GeminiProvider(Provider):
         with path.open("w", encoding="utf-8") as fh:
             for custom_id, body in requests:
                 json.dump(
-                    {"key": custom_id, "request": self._request(body)},
-                    fh,
-                    separators=(",", ":"),
+                    {"key": custom_id, "request": self._request(body)}, fh, separators=(",", ":")
                 )
                 fh.write("\n")
 
     def upload(self, path: Path) -> str:
         uploaded = self.client.files.upload(
-            file=path,
-            config=types.UploadFileConfig(mime_type="application/jsonl"),
+            file=path, config=types.UploadFileConfig(mime_type="application/jsonl")
         )
         return uploaded.name
 
     def create(self, *, job_id: str, model: str, file_id: str) -> str:
         batch = self.client.batches.create(
-            model=model,
-            src=file_id,
-            config={"display_name": f"batch-llm-{job_id}"},
+            model=model, src=file_id, config={"display_name": f"batch-llm-{job_id}"}
         )
         return batch.name
 

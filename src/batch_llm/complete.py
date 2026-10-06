@@ -48,9 +48,7 @@ def load_generation_config(config: GenerationConfig) -> dict[str, Any]:
     if not has_reserved:
         loaded = {"generation": loaded}
     else:
-        top_level_generation = {
-            k: v for k, v in loaded.items() if k not in _RESERVED_CONFIG_KEYS
-        }
+        top_level_generation = {k: v for k, v in loaded.items() if k not in _RESERVED_CONFIG_KEYS}
         config_values = {k: v for k, v in loaded.items() if k in _RESERVED_CONFIG_KEYS}
         nested_generation = config_values.get("generation")
         if nested_generation is None:
@@ -64,8 +62,7 @@ def load_generation_config(config: GenerationConfig) -> dict[str, Any]:
         if conflicts:
             names = ", ".join(sorted(conflicts))
             raise ValueError(
-                "generation option(s) specified both at top level and inside "
-                f"'generation': {names}"
+                f"generation option(s) specified both at top level and inside 'generation': {names}"
             )
 
         config_values["generation"] = {**nested_generation, **top_level_generation}
@@ -104,7 +101,6 @@ def load_generation_config(config: GenerationConfig) -> dict[str, Any]:
         loaded["system_prompt_file"] = str(prompt_path)
 
     return loaded
-
 
 
 def complete_prompts(
@@ -170,11 +166,7 @@ def complete_prompts(
     if api_key_var != expected:
         raise ValueError(f"{provider} requires {expected}, got {api_key_var}")
 
-    client = BatchClient(
-        provider,
-        api_key=os.environ.get(api_key_var),
-        storage_path=cache_dir,
-    )
+    client = BatchClient(provider, api_key=os.environ.get(api_key_var), storage_path=cache_dir)
 
     unique_prompts = list(dict.fromkeys(row[dataset_text_field] for row in source))
 
@@ -201,10 +193,7 @@ def complete_prompts(
     job = None
     if missing_prompts:
         job = client.submit(
-            missing_prompts,
-            model=model,
-            generation=generation,
-            system_prompt=system_prompt,
+            missing_prompts, model=model, generation=generation, system_prompt=system_prompt
         )
         wait_started = time.monotonic()
         job = client.wait(job, poll_interval=wait_interval_s, timeout=total_wait_s)
@@ -254,9 +243,8 @@ def complete_prompts(
                     result.response,
                     result.usage or _usage(result.response, provider),
                     usage_scope=result.usage_scope or ("request" if result.usage else None),
-                    usage_id=result.usage_id or (
-                        f"{job.id}:{result.custom_id}" if result.usage is not None else None
-                    ),
+                    usage_id=result.usage_id
+                    or (f"{job.id}:{result.custom_id}" if result.usage is not None else None),
                 )
 
     config_json = json.dumps(cfg, sort_keys=True, default=str)
@@ -271,11 +259,12 @@ def complete_prompts(
                     "response": result.response,
                     "generated_text": _generated_text(result.response, provider),
                     "error": result.error,
-                    "error_message": _format_provider_error(result.error) if result.error is not None else None,
+                    "error_message": _format_provider_error(result.error)
+                    if result.error is not None
+                    else None,
                     "usage": result.usage or _usage(result.response, provider),
-                    "usage_scope": result.usage_scope or (
-                        "request" if (result.usage or _usage(result.response, provider)) else None
-                    ),
+                    "usage_scope": result.usage_scope
+                    or ("request" if (result.usage or _usage(result.response, provider)) else None),
                     "usage_id": result.usage_id,
                     "request.model": model,
                     "request.api": provider.upper(),

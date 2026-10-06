@@ -38,9 +38,7 @@ Then:
 from batch_llm import complete_prompts
 
 results = complete_prompts(
-    ["first prompt", "second prompt"],
-    model="gpt-5.6",
-    generation_config={"temperature": 0},
+    ["first prompt", "second prompt"], model="gpt-5.6", generation_config={"temperature": 0}
 )
 
 for row in results:
@@ -51,9 +49,7 @@ For Gemini:
 
 ```python
 results = complete_prompts(
-    ["first prompt", "second prompt"],
-    model="gemini-2.5-pro",
-    generation_config={"temperature": 0},
+    ["first prompt", "second prompt"], model="gemini-2.5-pro", generation_config={"temperature": 0}
 )
 ```
 
@@ -66,20 +62,14 @@ For example, if one call completes 100 prompts and a later call contains 100 pro
 The input can be a single string:
 
 ```python
-results = complete_prompts(
-    "hello",
-    model="gpt-5.6",
-    generation_config={"temperature": 0},
-)
+results = complete_prompts("hello", model="gpt-5.6", generation_config={"temperature": 0})
 ```
 
 an iterable of strings:
 
 ```python
 results = complete_prompts(
-    ["first prompt", "second prompt"],
-    model="gpt-5.6",
-    generation_config={"temperature": 0},
+    ["first prompt", "second prompt"], model="gpt-5.6", generation_config={"temperature": 0}
 )
 ```
 
@@ -87,10 +77,7 @@ or mappings containing the prompt field:
 
 ```python
 results = complete_prompts(
-    [
-        {"id": "a", "prompt": "first prompt"},
-        {"id": "b", "prompt": "second prompt"},
-    ],
+    [{"id": "a", "prompt": "first prompt"}, {"id": "b", "prompt": "second prompt"}],
     model="gpt-5.6",
     generation_config={"temperature": 0},
 )
@@ -114,12 +101,7 @@ results = complete_prompts(
 `generation_config` can be a mapping:
 
 ```python
-config = {
-    "system_prompt": "Answer concisely.",
-    "generation": {
-        "temperature": 0,
-    },
-}
+config = {"system_prompt": "Answer concisely.", "generation": {"temperature": 0}}
 ```
 
 A mapping containing only generation options is shorthand for the `generation` object:
@@ -131,11 +113,7 @@ A mapping containing only generation options is shorthand for the `generation` o
 A JSON config filename can also be passed directly:
 
 ```python
-results = complete_prompts(
-    ["hello"],
-    model="gpt-5.6",
-    generation_config="generation.json",
-)
+results = complete_prompts(["hello"], model="gpt-5.6", generation_config="generation.json")
 ```
 
 For example:
@@ -176,10 +154,7 @@ A supported environment variable name can be selected explicitly:
 
 ```python
 results = complete_prompts(
-    ["hello"],
-    model="gpt-5.6",
-    generation_config=config,
-    api_key_var="OPENAI_API_KEY",
+    ["hello"], model="gpt-5.6", generation_config=config, api_key_var="OPENAI_API_KEY"
 )
 ```
 
@@ -225,10 +200,7 @@ Or override the location for an individual call:
 
 ```python
 results = complete_prompts(
-    ["hello"],
-    model="gpt-5.6",
-    generation_config=config,
-    cache_dir="/data/batch-llm-cache",
+    ["hello"], model="gpt-5.6", generation_config=config, cache_dir="/data/batch-llm-cache"
 )
 ```
 
@@ -266,12 +238,7 @@ export BATCH_LLM_WAIT_INTERVAL_S=60
 Or override it for one call:
 
 ```python
-results = complete_prompts(
-    ["hello"],
-    model="gpt-5.6",
-    generation_config=config,
-    wait_interval_s=60,
-)
+results = complete_prompts(["hello"], model="gpt-5.6", generation_config=config, wait_interval_s=60)
 ```
 
 An explicit function argument takes precedence over the environment variable.
@@ -296,11 +263,7 @@ for row in results:
 Each newly executed provider request also has:
 
 ```python
-{
-    "usage_scope": "request",
-    "usage_id": "...",
-    "usage": {...},
-}
+{"usage_scope": "request", "usage_id": "...", "usage": {...}}
 ```
 
 `usage_id` identifies the exact provider request that incurred the usage.
@@ -356,10 +319,7 @@ from batch_llm import BatchClient
 
 client = BatchClient("openai")
 
-job = client.submit(
-    ["one", "two"],
-    model="gpt-5.6",
-)
+job = client.submit(["one", "two"], model="gpt-5.6")
 
 job = client.wait(job)
 results = client.results(job)

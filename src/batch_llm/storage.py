@@ -107,7 +107,9 @@ class Store:
             if "usage_scope" not in result_columns:
                 conn.execute("ALTER TABLE results ADD COLUMN usage_scope TEXT")
 
-            cache_columns = {row["name"] for row in conn.execute("PRAGMA table_info(response_cache)")}
+            cache_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(response_cache)")
+            }
             if "usage" not in cache_columns:
                 conn.execute("ALTER TABLE response_cache ADD COLUMN usage TEXT")
             if "usage_scope" not in cache_columns:
@@ -160,7 +162,12 @@ class Store:
                     ON CONFLICT(job_id, ordinal) DO NOTHING
                     """,
                     [
-                        (job_id, i, custom_id, json.dumps(body, sort_keys=True, separators=(",", ":")))
+                        (
+                            job_id,
+                            i,
+                            custom_id,
+                            json.dumps(body, sort_keys=True, separators=(",", ":")),
+                        )
                         for i, (custom_id, body) in enumerate(requests)
                     ],
                 )
@@ -204,10 +211,11 @@ class Store:
         now = time.time()
         with closing(self.connect()) as conn:
             row = conn.execute(
-                "SELECT lease_owner, lease_expires FROM jobs WHERE id = ?",
-                (job_id,),
+                "SELECT lease_owner, lease_expires FROM jobs WHERE id = ?", (job_id,)
             ).fetchone()
-        return bool(row and row["lease_owner"] and row["lease_expires"] and row["lease_expires"] >= now)
+        return bool(
+            row and row["lease_owner"] and row["lease_expires"] and row["lease_expires"] >= now
+        )
 
     def release(self, job_id: str, owner: str) -> None:
         with self.immediate() as conn:
@@ -240,8 +248,7 @@ class Store:
     def request_rows(self, job_id: str) -> list[tuple[str, dict[str, Any]]]:
         with closing(self.connect()) as conn:
             rows = conn.execute(
-                "SELECT custom_id, body FROM requests WHERE job_id = ? ORDER BY ordinal",
-                (job_id,),
+                "SELECT custom_id, body FROM requests WHERE job_id = ? ORDER BY ordinal", (job_id,)
             ).fetchall()
         return [(r["custom_id"], json.loads(r["body"])) for r in rows]
 
@@ -262,7 +269,9 @@ class Store:
                         job_id,
                         r.custom_id,
                         json.dumps(r.response, sort_keys=True) if r.response is not None else None,
-                        json.dumps(r.error, sort_keys=True) if isinstance(r.error, dict) else r.error,
+                        json.dumps(r.error, sort_keys=True)
+                        if isinstance(r.error, dict)
+                        else r.error,
                         json.dumps(r.usage, sort_keys=True) if r.usage is not None else None,
                         r.usage_scope or ("request" if r.usage is not None else None),
                     )
@@ -270,10 +279,7 @@ class Store:
                 ],
             )
 
-
-    def ensure_cache_request(
-        self, request_hash: str, provider: str, body: dict[str, Any]
-    ) -> None:
+    def ensure_cache_request(self, request_hash: str, provider: str, body: dict[str, Any]) -> None:
         canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         with self.immediate() as conn:
             conn.execute(

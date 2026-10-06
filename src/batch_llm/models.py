@@ -18,12 +18,7 @@ class BatchStatus(str, Enum):
 
     @property
     def terminal(self) -> bool:
-        return self in {
-            self.COMPLETED,
-            self.FAILED,
-            self.CANCELLED,
-            self.EXPIRED,
-        }
+        return self in {self.COMPLETED, self.FAILED, self.CANCELLED, self.EXPIRED}
 
 
 @dataclass(frozen=True)

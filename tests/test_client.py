@@ -136,10 +136,7 @@ def test_submit_includes_system_prompt_and_generation(tmp_path: Path):
     body = provider.requests[0][1]
     assert body == {
         "model": "m",
-        "messages": [
-            {"role": "system", "content": "system"},
-            {"role": "user", "content": "hello"},
-        ],
+        "messages": [{"role": "system", "content": "system"}, {"role": "user", "content": "hello"}],
         "temperature": 0.2,
     }
 

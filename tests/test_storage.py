@@ -29,8 +29,12 @@ def test_create_same_request_is_idempotent(tmp_path: Path):
 def test_claim_is_exclusive(tmp_path: Path):
     store = Store(tmp_path / "state.sqlite3")
     store.create_or_get_job(
-        job_id="a", provider="fake", model="x", endpoint="e",
-        request_hash="hash", requests=[("r", {})]
+        job_id="a",
+        provider="fake",
+        model="x",
+        endpoint="e",
+        request_hash="hash",
+        requests=[("r", {})],
     )
     assert store.claim("a", "one", 60)
     assert not store.claim("a", "two", 60)
@@ -51,11 +55,7 @@ def test_results_follow_request_order_not_provider_order(tmp_path: Path):
         requests=[("request-0", {}), ("request-1", {})],
     )
     store.save_results(
-        "a",
-        [
-            BatchResult("request-1", {"value": 1}),
-            BatchResult("request-0", {"value": 0}),
-        ],
+        "a", [BatchResult("request-1", {"value": 1}), BatchResult("request-0", {"value": 0})]
     )
     assert [r.custom_id for r in store.results("a")] == ["request-0", "request-1"]
 
@@ -74,8 +74,7 @@ def test_results_preserve_usage(tmp_path: Path):
     )
     usage = {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15}
     store.save_results(
-        "usage",
-        [BatchResult("request-0", {"usage": usage}, usage=usage, usage_scope="request")],
+        "usage", [BatchResult("request-0", {"usage": usage}, usage=usage, usage_scope="request")]
     )
     result = store.results("usage")[0]
     assert result.usage == usage
@@ -87,11 +86,7 @@ def test_results_preserve_usage(tmp_path: Path):
 def test_response_cache_preserves_sample_order_and_usage(tmp_path: Path):
     store = Store(tmp_path / "state.sqlite3")
     store.add_cached_response(
-        "k",
-        {"value": 1},
-        {"total_tokens": 10},
-        usage_scope="request",
-        usage_id="job:request-0",
+        "k", {"value": 1}, {"total_tokens": 10}, usage_scope="request", usage_id="job:request-0"
     )
     store.add_cached_response("k", {"value": 2}, None)
     rows = store.cached_responses("k")
@@ -151,8 +146,7 @@ def test_cache_request_provenance_is_persisted(tmp_path: Path):
     conn = sqlite3.connect(store.path)
     try:
         row = conn.execute(
-            "SELECT provider, body FROM cache_requests WHERE request_hash = ?",
-            ("hash-1",),
+            "SELECT provider, body FROM cache_requests WHERE request_hash = ?", ("hash-1",)
         ).fetchone()
     finally:
         conn.close()
