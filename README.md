@@ -4,9 +4,19 @@ Small, durable Python client for OpenAI and Gemini batch APIs. It uses local SQL
 
 ## Install
 
+Install directly from GitHub. For Poetry:
+
 ```bash
-pip install batch-llm
+poetry add git+https://github.com/creisle/batch-llm.git
 ```
+
+Or with pip:
+
+```bash
+pip install "batch-llm @ git+https://github.com/creisle/batch-llm.git"
+```
+
+For reproducible installs, pin a tag or commit rather than tracking `main`.
 
 ## Quick start
 
@@ -147,7 +157,7 @@ For example:
 
 The contents of `system_prompt_file` are resolved before request/cache identity is calculated. The file path itself is not part of the cache key, so moving or renaming a prompt file without changing its contents does not invalidate cached results.
 
-The cache identity includes the provider, model, resolved messages/system prompt, and generation configuration. Changing any model request parameter therefore creates a distinct cached request.
+The cache identity is calculated from the effective provider request: provider, model, resolved messages/system prompt, and provider-supported generation parameters. Options that batch-llm ignores before submission (such as `min_new_tokens`, `do_sample`, `use_cache`, and `truncation`) do not change cache identity. Provider aliases are normalized too, so equivalent options such as OpenAI `max_new_tokens` and `max_completion_tokens` share the same cache identity.
 
 ## Credentials
 
@@ -301,6 +311,10 @@ When calculating token or cost totals, count each unique `usage_id` once.
 
 The complete raw provider response is also retained so additional usage fields introduced by providers remain available.
 
+### Provider errors
+
+If an individual provider request fails, the returned row preserves the raw provider error in `error` and adds a concise human-readable `error_message`. Provider failures are also logged with the local batch ID, remote batch ID, request ID, and provider error details. Successful requests from the same batch are still returned normally.
+
 Legacy caches migrated from an old multi-choice (`n > 1`) response cannot provide exact per-choice usage. Such usage is stored once with:
 
 ```text
@@ -353,13 +367,21 @@ results = client.results(job)
 
 ## Migrate an existing response cache
 
-A one-off migration utility is included for SQLite caches using the `requests_cache_detailed` schema:
+A one-off migration utility is included for old SQLite caches using the `requests_cache_detailed` schema:
 
 ```bash
 python scripts/migrate_legacy_cache.py /path/to/old-cache.sqlite
 ```
 
-By default it imports into the configured `batch-llm` database. To target a specific database or cache directory:
+The migration builds a **fresh current-schema** batch-llm database. The old `requests_cache_detailed` table is used only as the source and is never copied into the destination. Cached request provenance is stored natively in `cache_requests`, and responses are written to `response_cache` using the current normalized cache identity.
+
+If the destination already exists, explicitly replace it only after the fresh migration succeeds:
+
+```bash
+python scripts/migrate_legacy_cache.py /path/to/old-cache.sqlite --overwrite
+```
+
+Or choose another destination:
 
 ```bash
 python scripts/migrate_legacy_cache.py /path/to/old-cache.sqlite \

@@ -83,7 +83,11 @@ class BatchClient:
             body = {"model": model, "messages": messages, **generation}
             requests.append((f"request-{i}", body))
 
-        request_hash = self._hash_request(self.provider.name, model, requests)
+        identity_requests = [
+            (custom_id, self.provider.cache_identity_body(body))
+            for custom_id, body in requests
+        ]
+        request_hash = self._hash_request(self.provider.name, model, identity_requests)
         job_id = request_hash[:32]
         job = self.store.create_or_get_job(
             job_id=job_id,

@@ -53,6 +53,9 @@ def test_complete_prompts_preserves_input_order_duplicates_and_usage(monkeypatch
         def __init__(self):
             self.rows = {}
 
+        def ensure_cache_request(self, key, provider, body):
+            return None
+
         def cached_responses(self, key):
             return list(self.rows.get(key, []))
 
@@ -226,7 +229,7 @@ def test_wait_interval_uses_env_when_not_explicit(monkeypatch, tmp_path):
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
-            self.store = type("Store", (), {"cached_responses": lambda self, key: [], "add_cached_response": lambda self, *args, **kwargs: None})()
+            self.store = type("Store", (), {"ensure_cache_request": lambda self, *args, **kwargs: None, "cached_responses": lambda self, key: [], "add_cached_response": lambda self, *args, **kwargs: None})()
 
         def submit(self, *args, **kwargs):
             return type("Job", (), {"id": "job", "completed": False})()
@@ -265,7 +268,7 @@ def test_explicit_wait_interval_overrides_env(monkeypatch, tmp_path):
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
-            self.store = type("Store", (), {"cached_responses": lambda self, key: [], "add_cached_response": lambda self, *args, **kwargs: None})()
+            self.store = type("Store", (), {"ensure_cache_request": lambda self, *args, **kwargs: None, "cached_responses": lambda self, key: [], "add_cached_response": lambda self, *args, **kwargs: None})()
 
         def submit(self, *args, **kwargs):
             return type("Job", (), {"id": "job", "completed": False})()
@@ -391,13 +394,32 @@ def test_load_generation_config_rejects_system_prompt_and_file(tmp_path: Path):
         )
 
 
-def test_load_generation_config_rejects_mixed_full_and_shorthand_generation_options():
-    with pytest.raises(ValueError, match="unexpected top-level key"):
+def test_load_generation_config_merges_nested_and_top_level_generation_options():
+    config = load_generation_config(
+        {
+            "generation": {"temperature": 0},
+            "system_prompt": "be brief",
+            "max_tokens": 20,
+            "min_new_tokens": 5,
+        }
+    )
+
+    assert config == {
+        "system_prompt": "be brief",
+        "generation": {
+            "temperature": 0,
+            "max_tokens": 20,
+            "min_new_tokens": 5,
+        },
+    }
+
+
+def test_load_generation_config_rejects_duplicate_generation_option_locations():
+    with pytest.raises(ValueError, match="specified both at top level and inside 'generation'"):
         load_generation_config(
             {
                 "generation": {"temperature": 0},
-                "system_prompt": "be brief",
-                "max_tokens": 20,
+                "temperature": 1,
             }
         )
 
@@ -460,3 +482,43 @@ def test_batch_job_hash_uses_resolved_system_prompt_not_file_path(tmp_path: Path
     assert BatchClient._hash_request("openai", "model-a", requests(cfg_a)) == BatchClient._hash_request(
         "openai", "model-a", requests(cfg_b)
     )
+
+
+def test_complete_prompts_warns_for_ignored_generation_options(monkeypatch, tmp_path):
+    class FakeStore:
+        def ensure_cache_request(self, *args, **kwargs):
+            return None
+
+        def cached_responses(self, _key):
+            return []
+
+        def add_cached_response(self, *args, **kwargs):
+            return None
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.store = FakeStore()
+
+        def submit(self, prompts, **kwargs):
+            from types import SimpleNamespace
+            return SimpleNamespace(id="job", remote_job_id="remote", completed=True, status=SimpleNamespace(value="completed"), error=None)
+
+        def wait(self, job, **kwargs):
+            return job
+
+        def results(self, job, refresh=False):
+            from batch_llm.models import BatchResult
+            return [BatchResult(custom_id="request-0", response={"choices": [{"message": {"content": "ok"}}]})]
+
+    monkeypatch.setattr("batch_llm.complete.BatchClient", FakeClient)
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
+
+    with pytest.warns(UserWarning, match=r"min_new_tokens.*use_cache"):
+        complete_prompts(
+            ["hello"],
+            model="gpt-test",
+            generation_config={"temperature": 0, "min_new_tokens": 1, "use_cache": True},
+            cache_dir=tmp_path,
+            wait_interval_s=0.001,
+            total_wait_s=1,
+        )

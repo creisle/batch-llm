@@ -7,11 +7,19 @@ from typing import Any
 from openai import OpenAI
 
 from ..models import BatchResult, BatchStatus
+from ..request_identity import openai_request_body
 from .base import Provider
 
 
 class OpenAIProvider(Provider):
     name = "openai"
+
+    @staticmethod
+    def _request_body(body: dict[str, Any]) -> dict[str, Any]:
+        return openai_request_body(body)
+
+    def cache_identity_body(self, body: dict[str, Any]) -> dict[str, Any]:
+        return self._request_body(body)
 
     def __init__(self, api_key: str | None = None, client: OpenAI | None = None):
         self.client = client or OpenAI(api_key=api_key)
@@ -24,7 +32,7 @@ class OpenAIProvider(Provider):
                         "custom_id": custom_id,
                         "method": "POST",
                         "url": "/v1/chat/completions",
-                        "body": body,
+                        "body": self._request_body(body),
                     },
                     fh,
                     separators=(",", ":"),
@@ -74,22 +82,34 @@ class OpenAIProvider(Provider):
 
     def results(self, remote_job_id: str) -> list[BatchResult]:
         batch = self.client.batches.retrieve(remote_job_id)
-        if not batch.output_file_id:
-            return []
-        content = self.client.files.content(batch.output_file_id).content
-        rows = []
-        for line in content.decode("utf-8").splitlines():
-            if not line.strip():
-                continue
-            item = json.loads(line)
-            response = item.get("response")
-            rows.append(
-                BatchResult(
-                    custom_id=item["custom_id"],
-                    response=response.get("body") if response else None,
-                    error=item.get("error"),
-                    usage=(response.get("body") or {}).get("usage") if response else None,
-                    usage_scope="request" if response and (response.get("body") or {}).get("usage") else None,
+        rows: list[BatchResult] = []
+
+        # Successful and failed requests may be split across output and error
+        # files. Read both so a completed batch always maps back to every
+        # request that the provider reported.
+        file_ids = [
+            getattr(batch, "output_file_id", None),
+            getattr(batch, "error_file_id", None),
+        ]
+        for file_id in dict.fromkeys(file_id for file_id in file_ids if file_id):
+            content = self.client.files.content(file_id).content
+            for line in content.decode("utf-8").splitlines():
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                response = item.get("response")
+                body = response.get("body") if response else None
+                usage = (body or {}).get("usage")
+                error = item.get("error")
+                if error is None and isinstance(body, dict):
+                    error = body.get("error")
+                rows.append(
+                    BatchResult(
+                        custom_id=item["custom_id"],
+                        response=body,
+                        error=error,
+                        usage=usage,
+                        usage_scope="request" if usage else None,
+                    )
                 )
-            )
         return rows

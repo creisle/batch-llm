@@ -11,6 +11,9 @@ class MemoryStore:
     def __init__(self):
         self.cache = {}
 
+    def ensure_cache_request(self, key, provider, body):
+        return None
+
     def cached_responses(self, key):
         return list(self.cache.get(key, []))
 
@@ -144,7 +147,39 @@ def test_provider_result_count_mismatch_raises(tmp_path: Path):
             provider="openai",
             api_key_var="OPENAI_API_KEY",
             cache_dir=tmp_path,
+            total_wait_s=0,
         )
+
+
+def test_completed_batch_retries_until_results_are_available(tmp_path: Path, monkeypatch):
+    calls = {"count": 0}
+
+    def delayed_results(job, prompts):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return []
+        return [
+            BatchResult(
+                f"request-{i}",
+                {"choices": [{"message": {"content": f"out:{prompt}"}}]},
+            )
+            for i, prompt in enumerate(prompts)
+        ]
+
+    CompleteFakeClient.result_factory = delayed_results
+    monkeypatch.setattr(complete_module.time, "sleep", lambda _seconds: None)
+    rows = complete_module.complete_prompts(
+        ["a", "b"],
+        model="m",
+        generation_config={},
+        provider="openai",
+        api_key_var="OPENAI_API_KEY",
+        cache_dir=tmp_path,
+        wait_interval_s=0.001,
+        total_wait_s=1,
+    )
+    assert calls["count"] == 2
+    assert [row["generated_text"] for row in rows] == ["out:a", "out:b"]
 
 
 def test_empty_input_returns_without_client(monkeypatch):
@@ -313,3 +348,54 @@ def test_string_inputs_return_prompt_field(tmp_path: Path, prompts_factory, expe
     assert isinstance(rows, list)
     assert all(isinstance(row, dict) for row in rows)
     assert [row["prompt"] for row in rows] == expected_prompts
+
+
+def test_provider_error_has_readable_message_and_is_logged(tmp_path: Path, caplog):
+    def failed_result(job, prompts):
+        return [
+            BatchResult(
+                "request-0",
+                None,
+                error={
+                    "code": "invalid_request_error",
+                    "type": "invalid_request_error",
+                    "message": "max_tokens is too large",
+                },
+            )
+        ]
+
+    CompleteFakeClient.result_factory = failed_result
+    with caplog.at_level("ERROR"):
+        rows = complete_module.complete_prompts(
+            ["a"],
+            model="m",
+            generation_config={},
+            provider="openai",
+            api_key_var="OPENAI_API_KEY",
+            cache_dir=tmp_path,
+        )
+
+    assert rows[0]["error"] == {
+        "code": "invalid_request_error",
+        "type": "invalid_request_error",
+        "message": "max_tokens is too large",
+    }
+    assert rows[0]["error_message"] == (
+        "code=invalid_request_error, type=invalid_request_error, "
+        "message=max_tokens is too large"
+    )
+    assert "request=request-0" in caplog.text
+    assert "max_tokens is too large" in caplog.text
+
+
+def test_nested_provider_error_is_human_readable():
+    error = {
+        "error": {
+            "code": 400,
+            "status": "INVALID_ARGUMENT",
+            "message": "generation config is invalid",
+        }
+    }
+    assert complete_module._format_provider_error(error) == (
+        "code=400, status=INVALID_ARGUMENT, message=generation config is invalid"
+    )

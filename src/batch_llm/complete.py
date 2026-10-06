@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
+import warnings
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Literal
 
 from .client import BatchClient
 from .cache import request_cache_hash
+from .request_identity import effective_request_body, ignored_generation_keys
+
+logger = logging.getLogger(__name__)
 
 GenerationConfig = str | os.PathLike[str] | Mapping[str, Any]
 PromptInput = str | Iterable[str] | Iterable[Mapping[str, Any]]
@@ -41,18 +47,29 @@ def load_generation_config(config: GenerationConfig) -> dict[str, Any]:
     has_reserved = bool(_RESERVED_CONFIG_KEYS.intersection(loaded))
     if not has_reserved:
         loaded = {"generation": loaded}
-    elif "generation" not in loaded:
-        generation = {k: v for k, v in loaded.items() if k not in _RESERVED_CONFIG_KEYS}
-        loaded = {k: v for k, v in loaded.items() if k in _RESERVED_CONFIG_KEYS}
-        loaded["generation"] = generation
     else:
-        unexpected = set(loaded) - _RESERVED_CONFIG_KEYS
-        if unexpected:
-            names = ", ".join(sorted(unexpected))
+        top_level_generation = {
+            k: v for k, v in loaded.items() if k not in _RESERVED_CONFIG_KEYS
+        }
+        config_values = {k: v for k, v in loaded.items() if k in _RESERVED_CONFIG_KEYS}
+        nested_generation = config_values.get("generation")
+        if nested_generation is None:
+            nested_generation = {}
+        elif not isinstance(nested_generation, Mapping):
+            raise TypeError("generation must be a mapping")
+        else:
+            nested_generation = dict(nested_generation)
+
+        conflicts = set(top_level_generation).intersection(nested_generation)
+        if conflicts:
+            names = ", ".join(sorted(conflicts))
             raise ValueError(
-                f"generation options must be inside 'generation' when using config keys; "
-                f"unexpected top-level key(s): {names}"
+                "generation option(s) specified both at top level and inside "
+                f"'generation': {names}"
             )
+
+        config_values["generation"] = {**nested_generation, **top_level_generation}
+        loaded = config_values
 
     loaded = dict(loaded)
     generation = loaded.get("generation")
@@ -129,6 +146,15 @@ def complete_prompts(
     generation = dict(cfg.get("generation") or {})
     system_prompt = cfg.get("system_prompt")
 
+    ignored = sorted(ignored_generation_keys(generation))
+    if ignored:
+        warnings.warn(
+            "batch-llm will ignore generation parameter(s) that are not sent to the provider "
+            f"and do not affect cache identity: {', '.join(ignored)}",
+            UserWarning,
+            stacklevel=2,
+        )
+
     if provider is None:
         if api_key_var:
             provider = "gemini" if api_key_var == "GEMINI_API_KEY" else "openai"
@@ -163,7 +189,9 @@ def complete_prompts(
     missing_prompts: list[str] = []
     missing_keys: list[str] = []
     for prompt in unique_prompts:
-        cache_key = request_cache_hash(provider, request_body(prompt))
+        effective_body = effective_request_body(provider, request_body(prompt))
+        cache_key = request_cache_hash(provider, effective_body)
+        client.store.ensure_cache_request(cache_key, provider, effective_body)
         cached = client.store.cached_responses(cache_key)[:min_repeat]
         by_prompt[prompt] = list(cached)
         for _ in range(min_repeat - len(cached)):
@@ -178,18 +206,48 @@ def complete_prompts(
             generation=generation,
             system_prompt=system_prompt,
         )
+        wait_started = time.monotonic()
         job = client.wait(job, poll_interval=wait_interval_s, timeout=total_wait_s)
         if not job.completed:
-            raise RuntimeError(f"batch {job.id} ended with status={job.status.value}: {job.error or ''}")
-
-        batch_results = client.results(job, refresh=False)
-        if len(batch_results) != len(missing_prompts):
+            detail = f": {job.error}" if job.error else ""
             raise RuntimeError(
-                f"batch {job.id} returned {len(batch_results)} results for {len(missing_prompts)} requests"
+                f"{provider} batch {job.id} ({job.remote_job_id or 'no remote id'}) "
+                f"ended with status={job.status.value}{detail}"
             )
+
+        # Providers can briefly report a batch as completed before its output
+        # file is readable. Keep checking within the original wait budget
+        # rather than treating a transient empty/partial result set as final.
+        while True:
+            batch_results = client.results(job, refresh=False)
+            if len(batch_results) == len(missing_prompts):
+                break
+            elapsed = time.monotonic() - wait_started
+            if total_wait_s is not None and elapsed >= total_wait_s:
+                errors = [
+                    _format_provider_error(result.error)
+                    for result in batch_results
+                    if result.error is not None
+                ]
+                error_detail = f"; provider errors: {' | '.join(errors[:5])}" if errors else ""
+                raise RuntimeError(
+                    f"{provider} batch {job.id} ({job.remote_job_id or 'no remote id'}) "
+                    f"returned {len(batch_results)} results for {len(missing_prompts)} requests "
+                    f"after waiting for results{error_detail}"
+                )
+            time.sleep(wait_interval_s)
 
         for prompt, cache_key, result in zip(missing_prompts, missing_keys, batch_results):
             by_prompt[prompt].append(result)
+            if result.error is not None:
+                logger.error(
+                    "%s batch request failed: batch=%s remote_batch=%s request=%s error=%s",
+                    provider,
+                    job.id,
+                    job.remote_job_id,
+                    result.custom_id,
+                    _format_provider_error(result.error),
+                )
             if result.response is not None and result.error is None:
                 client.store.add_cached_response(
                     cache_key,
@@ -213,6 +271,7 @@ def complete_prompts(
                     "response": result.response,
                     "generated_text": _generated_text(result.response, provider),
                     "error": result.error,
+                    "error_message": _format_provider_error(result.error) if result.error is not None else None,
                     "usage": result.usage or _usage(result.response, provider),
                     "usage_scope": result.usage_scope or (
                         "request" if (result.usage or _usage(result.response, provider)) else None
@@ -290,3 +349,28 @@ def _usage(response: dict[str, Any] | None, provider: str) -> dict[str, Any] | N
         return None
     usage = response.get("usage") or response.get("usageMetadata") or response.get("usage_metadata")
     return dict(usage) if isinstance(usage, Mapping) else None
+
+
+def _format_provider_error(error: Any) -> str:
+    """Return a concise human-readable provider error without losing raw error data."""
+    if error is None:
+        return ""
+    if isinstance(error, str):
+        return error
+    if isinstance(error, Mapping):
+        nested = error.get("error")
+        if isinstance(nested, Mapping):
+            return _format_provider_error(nested)
+
+        parts: list[str] = []
+        for key in ("code", "type", "status", "message"):
+            value = error.get(key)
+            if value not in (None, ""):
+                parts.append(f"{key}={value}")
+        if parts:
+            return ", ".join(parts)
+        try:
+            return json.dumps(dict(error), sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            return str(error)
+    return str(error)

@@ -137,3 +137,26 @@ def test_decode_plain_text_error(tmp_path: Path):
     )
     store.save_results("err", [BatchResult("request-0", None, error="plain error")])
     assert store.results("err")[0].error == "plain error"
+
+
+def test_cache_request_provenance_is_persisted(tmp_path: Path):
+    import json
+    import sqlite3
+
+    store = Store(tmp_path / "state.sqlite3")
+    body = {"model": "m", "messages": [{"role": "user", "content": "hello"}]}
+    store.ensure_cache_request("hash-1", "openai", body)
+    store.add_cached_response("hash-1", {"choices": []})
+
+    conn = sqlite3.connect(store.path)
+    try:
+        row = conn.execute(
+            "SELECT provider, body FROM cache_requests WHERE request_hash = ?",
+            ("hash-1",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row[0] == "openai"
+    assert json.loads(row[1]) == body

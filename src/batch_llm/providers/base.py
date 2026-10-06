@@ -10,6 +10,10 @@ from ..models import BatchResult, BatchStatus
 class Provider(ABC):
     name: str
 
+    def cache_identity_body(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Return the effective provider request body used for cache/job identity."""
+        return body
+
     @abstractmethod
     def write_input(self, requests: list[tuple[str, dict[str, Any]]], path: Path) -> None:
         ...

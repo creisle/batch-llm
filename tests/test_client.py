@@ -244,3 +244,19 @@ def test_retry_non_uncertain_job_is_noop(tmp_path: Path):
     result = client.retry_uncertain_submission(job)
     assert result.id == job.id
     assert provider.created == 0
+
+
+def test_batch_job_identity_ignores_provider_ignored_generation_options(tmp_path):
+    class IdentityProvider(FakeProvider):
+        def cache_identity_body(self, body):
+            return {k: v for k, v in body.items() if k != "min_new_tokens"}
+
+    provider = IdentityProvider()
+    client = BatchClient(provider, storage_path=tmp_path / "state.sqlite3")
+    job_a = client.submit(["hello"], model="model", generation={"temperature": 0})
+    job_b = client.submit(
+        ["hello"], model="model", generation={"temperature": 0, "min_new_tokens": 5}
+    )
+
+    assert job_a.id == job_b.id
+    assert provider.created == 1

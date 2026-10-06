@@ -305,3 +305,116 @@ def test_gemini_status_mappings_and_no_output():
     assert provider.status("unknown") == (BatchStatus.UNKNOWN, None)
     client.batches.jobs["empty"] = SimpleNamespace(dest=None, output=None)
     assert provider.results("empty") == []
+
+
+def test_openai_results_include_error_file_rows():
+    output = json.dumps(
+        {
+            "custom_id": "request-0",
+            "response": {"body": {"choices": [{"message": {"content": "ok"}}]}},
+            "error": None,
+        }
+    ).encode()
+    error = json.dumps(
+        {
+            "custom_id": "request-1",
+            "response": None,
+            "error": {"code": "bad_request", "message": "invalid request"},
+        }
+    ).encode()
+
+    class Files:
+        def content(self, file_id):
+            return SimpleNamespace(content={"output": output, "errors": error}[file_id])
+
+    client = OpenAIClient()
+    client.files = Files()
+    client.batches.jobs["batch"] = SimpleNamespace(
+        output_file_id="output", error_file_id="errors"
+    )
+    rows = OpenAIProvider(client=client).results("batch")
+    assert [row.custom_id for row in rows] == ["request-0", "request-1"]
+    assert rows[0].response["choices"][0]["message"]["content"] == "ok"
+    assert rows[1].response is None
+    assert rows[1].error == {"code": "bad_request", "message": "invalid request"}
+
+
+def test_openai_results_surface_error_from_response_body():
+    payload = json.dumps(
+        {
+            "custom_id": "request-0",
+            "response": {
+                "status_code": 400,
+                "request_id": "req_123",
+                "body": {
+                    "error": {
+                        "message": "Unsupported parameter",
+                        "type": "invalid_request_error",
+                        "code": "unsupported_parameter",
+                    }
+                },
+            },
+            "error": None,
+        }
+    ).encode()
+    client = OpenAIClient(payload)
+    client.batches.jobs["batch-1"] = SimpleNamespace(
+        output_file_id="output", error_file_id=None
+    )
+    provider = OpenAIProvider(client=client)
+    rows = provider.results("batch-1")
+    assert len(rows) == 1
+    assert rows[0].error == {
+        "message": "Unsupported parameter",
+        "type": "invalid_request_error",
+        "code": "unsupported_parameter",
+    }
+
+
+def test_openai_request_filters_local_generation_options_and_maps_max_new_tokens(tmp_path: Path):
+    provider = OpenAIProvider(client=OpenAIClient(b""))
+    path = tmp_path / "input.jsonl"
+    provider.write_input(
+        [
+            (
+                "request-0",
+                {
+                    "model": "gpt-test",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "min_new_tokens": 5,
+                    "max_new_tokens": 100,
+                    "do_sample": False,
+                    "use_cache": True,
+                    "truncation": True,
+                    "temperature": 0,
+                },
+            )
+        ],
+        path,
+    )
+    body = json.loads(path.read_text().strip())["body"]
+    assert body == {
+        "model": "gpt-test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_completion_tokens": 100,
+        "temperature": 0,
+    }
+
+
+def test_gemini_request_filters_local_generation_options_and_maps_max_new_tokens():
+    request = GeminiProvider._request(
+        {
+            "model": "gemini-test",
+            "messages": [{"role": "user", "content": "hello"}],
+            "min_new_tokens": 5,
+            "max_new_tokens": 100,
+            "do_sample": False,
+            "use_cache": True,
+            "truncation": True,
+            "temperature": 0,
+        }
+    )
+    assert request["generation_config"] == {
+        "maxOutputTokens": 100,
+        "temperature": 0,
+    }

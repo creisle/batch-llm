@@ -82,6 +82,13 @@ class Store:
                     FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS cache_requests (
+                    request_hash TEXT PRIMARY KEY,
+                    provider TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
                 CREATE TABLE IF NOT EXISTS response_cache (
                     request_hash TEXT NOT NULL,
                     sample_index INTEGER NOT NULL,
@@ -263,6 +270,22 @@ class Store:
                 ],
             )
 
+
+    def ensure_cache_request(
+        self, request_hash: str, provider: str, body: dict[str, Any]
+    ) -> None:
+        canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        with self.immediate() as conn:
+            conn.execute(
+                """
+                INSERT INTO cache_requests(request_hash, provider, body)
+                VALUES (?, ?, ?)
+                ON CONFLICT(request_hash) DO UPDATE SET
+                    provider = excluded.provider,
+                    body = excluded.body
+                """,
+                (request_hash, provider.lower(), canonical),
+            )
 
     def cached_responses(self, request_hash: str) -> list[BatchResult]:
         with closing(self.connect()) as conn:

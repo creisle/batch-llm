@@ -8,6 +8,7 @@ from google import genai
 from google.genai import types
 
 from ..models import BatchResult, BatchStatus
+from ..request_identity import gemini_request_body
 from .base import Provider
 
 
@@ -19,41 +20,10 @@ class GeminiProvider(Provider):
 
     @staticmethod
     def _request(body: dict[str, Any]) -> dict[str, Any]:
-        messages = body.get("messages", [])
-        contents = []
-        system_parts = []
-        for message in messages:
-            role = message["role"]
-            content = message["content"]
-            if isinstance(content, str):
-                parts = [{"text": content}]
-            else:
-                raise ValueError("Gemini adapter currently supports text message content only")
-            if role in {"system", "developer"}:
-                system_parts.extend(parts)
-            else:
-                contents.append({"role": "model" if role == "assistant" else "user", "parts": parts})
+        return gemini_request_body(body)
 
-        generation = {
-            k: v
-            for k, v in body.items()
-            if k not in {"model", "messages", "n"}
-        }
-        aliases = {
-            "max_tokens": "maxOutputTokens",
-            "max_completion_tokens": "maxOutputTokens",
-            "top_p": "topP",
-            "top_k": "topK",
-            "stop": "stopSequences",
-        }
-        generation = {aliases.get(k, k): v for k, v in generation.items()}
-
-        request: dict[str, Any] = {"contents": contents}
-        if generation:
-            request["generation_config"] = generation
-        if system_parts:
-            request["system_instruction"] = {"parts": system_parts}
-        return request
+    def cache_identity_body(self, body: dict[str, Any]) -> dict[str, Any]:
+        return self._request(body)
 
     def write_input(self, requests: list[tuple[str, dict[str, Any]]], path: Path) -> None:
         with path.open("w", encoding="utf-8") as fh:
