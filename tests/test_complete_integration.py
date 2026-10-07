@@ -8,6 +8,13 @@ from batch_llm.models import BatchJob, BatchResult, BatchStatus
 
 
 class MemoryStore:
+    def ensure_cache_requests(self, requests):
+        for request_hash, provider, body in requests:
+            self.ensure_cache_request(request_hash, provider, body)
+
+    def cached_responses_many(self, request_hashes):
+        return {key: self.cached_responses(key) for key in dict.fromkeys(request_hashes)}
+
     def __init__(self):
         self.cache = {}
 

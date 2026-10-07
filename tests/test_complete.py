@@ -48,11 +48,11 @@ def test_complete_prompts_preserves_input_order_duplicates_and_usage(monkeypatch
         def __init__(self):
             self.rows = {}
 
-        def ensure_cache_request(self, key, provider, body):
+        def ensure_cache_requests(self, requests):
             return None
 
-        def cached_responses(self, key):
-            return list(self.rows.get(key, []))
+        def cached_responses_many(self, keys):
+            return {key: list(self.rows.get(key, [])) for key in keys}
 
         def add_cached_response(
             self, key, response, usage=None, *, usage_scope=None, usage_id=None
@@ -225,8 +225,8 @@ def test_wait_interval_uses_env_when_not_explicit(monkeypatch, tmp_path):
                 "Store",
                 (),
                 {
-                    "ensure_cache_request": lambda self, *args, **kwargs: None,
-                    "cached_responses": lambda self, key: [],
+                    "ensure_cache_requests": lambda self, *args, **kwargs: None,
+                    "cached_responses_many": lambda self, keys: {key: [] for key in keys},
                     "add_cached_response": lambda self, *args, **kwargs: None,
                 },
             )()
@@ -273,8 +273,8 @@ def test_explicit_wait_interval_overrides_env(monkeypatch, tmp_path):
                 "Store",
                 (),
                 {
-                    "ensure_cache_request": lambda self, *args, **kwargs: None,
-                    "cached_responses": lambda self, key: [],
+                    "ensure_cache_requests": lambda self, *args, **kwargs: None,
+                    "cached_responses_many": lambda self, keys: {key: [] for key in keys},
                     "add_cached_response": lambda self, *args, **kwargs: None,
                 },
             )()
@@ -477,11 +477,11 @@ def test_batch_job_hash_uses_resolved_system_prompt_not_file_path(tmp_path: Path
 
 def test_complete_prompts_warns_for_ignored_generation_options(monkeypatch, tmp_path):
     class FakeStore:
-        def ensure_cache_request(self, *args, **kwargs):
+        def ensure_cache_requests(self, *args, **kwargs):
             return None
 
-        def cached_responses(self, _key):
-            return []
+        def cached_responses_many(self, keys):
+            return {key: [] for key in keys}
 
         def add_cached_response(self, *args, **kwargs):
             return None
@@ -525,3 +525,102 @@ def test_complete_prompts_warns_for_ignored_generation_options(monkeypatch, tmp_
             wait_interval_s=0.001,
             total_wait_s=1,
         )
+
+
+def test_complete_prompts_fully_cached_uses_one_bulk_read_and_no_cache_write(monkeypatch, tmp_path):
+    from batch_llm.models import BatchResult
+    import batch_llm.complete as complete_module
+
+    calls = {"lookup": 0, "ensure": 0}
+
+    class FakeStore:
+        def cached_responses_many(self, keys):
+            calls["lookup"] += 1
+            return {
+                key: [BatchResult("cache-0", {"choices": [{"message": {"content": "cached"}}]})]
+                for key in keys
+            }
+
+        def ensure_cache_requests(self, requests):
+            calls["ensure"] += 1
+
+        def add_cached_response(self, *args, **kwargs):
+            raise AssertionError("fully cached call must not add responses")
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.store = FakeStore()
+
+        def submit(self, *args, **kwargs):
+            raise AssertionError("fully cached call must not submit")
+
+    monkeypatch.setattr(complete_module, "BatchClient", FakeClient)
+    rows = complete_module.complete_prompts(
+        ["a", "b", "c"],
+        model="gpt-test",
+        generation_config={},
+        provider="openai",
+        api_key_var="OPENAI_API_KEY",
+        cache_dir=tmp_path,
+    )
+
+    assert len(rows) == 3
+    assert calls == {"lookup": 1, "ensure": 0}
+
+
+def test_complete_prompts_only_persists_missing_cache_requests(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from batch_llm.models import BatchResult
+    import batch_llm.complete as complete_module
+
+    ensured = []
+
+    class FakeStore:
+        def cached_responses_many(self, keys):
+            return {
+                keys[0]: [
+                    BatchResult("cache-0", {"choices": [{"message": {"content": "cached"}}]})
+                ],
+                keys[1]: [],
+            }
+
+        def ensure_cache_requests(self, requests):
+            ensured.extend(requests)
+
+        def add_cached_response(self, *args, **kwargs):
+            return None
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.store = FakeStore()
+
+        def submit(self, prompts, **kwargs):
+            assert list(prompts) == ["missing"]
+            return SimpleNamespace(
+                id="job",
+                remote_job_id="remote",
+                completed=True,
+                status=SimpleNamespace(value="completed"),
+                error=None,
+            )
+
+        def wait(self, job, **kwargs):
+            return job
+
+        def results(self, job, refresh=False):
+            return [BatchResult("request-0", {"choices": [{"message": {"content": "new"}}]})]
+
+    monkeypatch.setattr(complete_module, "BatchClient", FakeClient)
+    rows = complete_module.complete_prompts(
+        ["cached", "missing"],
+        model="gpt-test",
+        generation_config={},
+        provider="openai",
+        api_key_var="OPENAI_API_KEY",
+        cache_dir=tmp_path,
+    )
+
+    assert [row["generated_text"] for row in rows] == ["cached", "new"]
+    assert len(ensured) == 1
+    assert ensured[0][1] == "openai"

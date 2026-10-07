@@ -293,27 +293,60 @@ class Store:
                 (request_hash, provider.lower(), canonical),
             )
 
-    def cached_responses(self, request_hash: str) -> list[BatchResult]:
-        with closing(self.connect()) as conn:
-            rows = conn.execute(
-                """
-                SELECT sample_index, response, usage, usage_scope, usage_id
-                FROM response_cache
-                WHERE request_hash = ?
-                ORDER BY sample_index
-                """,
-                (request_hash,),
-            ).fetchall()
-        return [
-            BatchResult(
-                custom_id=f"cache-{r['sample_index']}",
-                response=json.loads(r["response"]),
-                usage=json.loads(r["usage"]) if r["usage"] else None,
-                usage_scope=r["usage_scope"],
-                usage_id=r["usage_id"],
+    def ensure_cache_requests(self, requests: list[tuple[str, str, dict[str, Any]]]) -> None:
+        if not requests:
+            return
+        rows = [
+            (
+                request_hash,
+                provider.lower(),
+                json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
             )
-            for r in rows
+            for request_hash, provider, body in requests
         ]
+        with self.immediate() as conn:
+            conn.executemany(
+                """
+                INSERT INTO cache_requests(request_hash, provider, body)
+                VALUES (?, ?, ?)
+                ON CONFLICT(request_hash) DO NOTHING
+                """,
+                rows,
+            )
+
+    def cached_responses_many(self, request_hashes: list[str]) -> dict[str, list[BatchResult]]:
+        unique_hashes = list(dict.fromkeys(request_hashes))
+        if not unique_hashes:
+            return {}
+        rows_by_hash: dict[str, list[BatchResult]] = {key: [] for key in unique_hashes}
+        with closing(self.connect()) as conn:
+            # Stay below SQLite builds that still use the traditional 999-variable limit.
+            for start in range(0, len(unique_hashes), 900):
+                chunk = unique_hashes[start : start + 900]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"""
+                    SELECT request_hash, sample_index, response, usage, usage_scope, usage_id
+                    FROM response_cache
+                    WHERE request_hash IN ({placeholders})
+                    ORDER BY request_hash, sample_index
+                    """,
+                    chunk,
+                ).fetchall()
+                for row in rows:
+                    rows_by_hash[row["request_hash"]].append(
+                        BatchResult(
+                            custom_id=f"cache-{row['sample_index']}",
+                            response=json.loads(row["response"]),
+                            usage=json.loads(row["usage"]) if row["usage"] else None,
+                            usage_scope=row["usage_scope"],
+                            usage_id=row["usage_id"],
+                        )
+                    )
+        return rows_by_hash
+
+    def cached_responses(self, request_hash: str) -> list[BatchResult]:
+        return self.cached_responses_many([request_hash])[request_hash]
 
     def add_cached_response(
         self,

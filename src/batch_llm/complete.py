@@ -177,18 +177,29 @@ def complete_prompts(
         messages.append({"role": "user", "content": prompt})
         return {"model": model, "messages": messages, **generation}
 
-    by_prompt: dict[str, list[Any]] = {}
-    missing_prompts: list[str] = []
-    missing_keys: list[str] = []
+    request_info: list[tuple[str, str, dict[str, Any]]] = []
     for prompt in unique_prompts:
         effective_body = effective_request_body(provider, request_body(prompt))
         cache_key = request_cache_hash(provider, effective_body)
-        client.store.ensure_cache_request(cache_key, provider, effective_body)
-        cached = client.store.cached_responses(cache_key)[:min_repeat]
+        request_info.append((prompt, cache_key, effective_body))
+
+    cached_by_key = client.store.cached_responses_many(
+        [cache_key for _, cache_key, _ in request_info]
+    )
+    by_prompt: dict[str, list[Any]] = {}
+    missing_prompts: list[str] = []
+    missing_keys: list[str] = []
+    missing_cache_requests: dict[str, tuple[str, str, dict[str, Any]]] = {}
+    for prompt, cache_key, effective_body in request_info:
+        cached = cached_by_key.get(cache_key, [])[:min_repeat]
         by_prompt[prompt] = list(cached)
         for _ in range(min_repeat - len(cached)):
             missing_prompts.append(prompt)
             missing_keys.append(cache_key)
+        if len(cached) < min_repeat:
+            missing_cache_requests.setdefault(cache_key, (cache_key, provider, effective_body))
+    if missing_cache_requests:
+        client.store.ensure_cache_requests(list(missing_cache_requests.values()))
 
     job = None
     if missing_prompts:

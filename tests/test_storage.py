@@ -154,3 +154,45 @@ def test_cache_request_provenance_is_persisted(tmp_path: Path):
     assert row is not None
     assert row[0] == "openai"
     assert json.loads(row[1]) == body
+
+
+def test_cached_responses_many_reads_multiple_keys(tmp_path: Path):
+    store = Store(tmp_path / "state.sqlite3")
+    store.add_cached_response("a", {"value": 1})
+    store.add_cached_response("a", {"value": 2})
+    store.add_cached_response("b", {"value": 3})
+
+    rows = store.cached_responses_many(["a", "b", "missing"])
+
+    assert [row.response["value"] for row in rows["a"]] == [1, 2]
+    assert [row.response["value"] for row in rows["b"]] == [3]
+    assert rows["missing"] == []
+
+
+def test_cached_responses_many_handles_more_than_sqlite_variable_limit(tmp_path: Path):
+    store = Store(tmp_path / "state.sqlite3")
+    store.add_cached_response("key-1000", {"value": 1000})
+
+    rows = store.cached_responses_many([f"key-{i}" for i in range(1001)])
+
+    assert rows["key-0"] == []
+    assert rows["key-1000"][0].response == {"value": 1000}
+
+
+def test_ensure_cache_requests_inserts_in_one_bulk_operation(tmp_path: Path):
+    import json
+    import sqlite3
+
+    store = Store(tmp_path / "state.sqlite3")
+    store.ensure_cache_requests(
+        [("hash-1", "openai", {"value": 1}), ("hash-2", "gemini", {"value": 2})]
+    )
+    with sqlite3.connect(store.path) as conn:
+        rows = conn.execute(
+            "SELECT request_hash, provider, body FROM cache_requests ORDER BY request_hash"
+        ).fetchall()
+
+    assert [(row[0], row[1], json.loads(row[2])) for row in rows] == [
+        ("hash-1", "openai", {"value": 1}),
+        ("hash-2", "gemini", {"value": 2}),
+    ]
