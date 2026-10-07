@@ -62,7 +62,9 @@ def test_recovers_remote_job_after_crash_window(tmp_path: Path):
     assert provider.created == 1
 
 
-def test_uncertain_job_is_not_automatically_resubmitted(tmp_path: Path):
+def test_uncertain_job_is_automatically_resubmitted_once(tmp_path: Path, monkeypatch):
+    import batch_llm.client as client_module
+
     provider = FakeProvider()
     client = BatchClient(provider, storage_path=tmp_path)
     job = client.submit("hello", model="m")
@@ -74,9 +76,10 @@ def test_uncertain_job_is_not_automatically_resubmitted(tmp_path: Path):
             (BatchStatus.SUBMITTING.value, job.id),
         )
 
-    with pytest.raises(SubmissionUncertainError):
-        client.refresh(job.id)
-    assert provider.created == 1
+    monkeypatch.setattr(client_module, "_RECONCILE_DELAYS", (0,))
+    recovered = client.refresh(job.id)
+    assert recovered.remote_job_id == f"remote-{job.id}"
+    assert provider.created == 2
 
 
 def test_heartbeat_prevents_takeover_during_slow_submission(tmp_path: Path):

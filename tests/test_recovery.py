@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from batch_llm.client import BatchClient, SubmissionUncertainError
+from batch_llm.client import BatchClient
 from batch_llm.models import BatchResult, BatchStatus
 from batch_llm.providers.base import Provider
 
@@ -50,7 +50,9 @@ class RecordingProvider(Provider):
         ]
 
 
-def test_uploaded_file_is_reused_after_failure_before_create(tmp_path: Path):
+def test_uploaded_file_is_reused_after_failure_before_create(tmp_path: Path, monkeypatch):
+    import batch_llm.client as client_module
+
     class FailCreateOnce(RecordingProvider):
         def __init__(self):
             super().__init__()
@@ -77,12 +79,9 @@ def test_uploaded_file_is_reused_after_failure_before_create(tmp_path: Path):
     assert jobs[0]["remote_file_id"] == "file-1"
     assert jobs[0]["status"] == BatchStatus.SUBMITTING.value
 
-    # The create call might have been accepted remotely, so normal recovery is conservative.
-    with pytest.raises(SubmissionUncertainError):
-        client.refresh(job_id)
-    assert provider.upload_count == 1
-
-    client.retry_uncertain_submission(job_id, force=True)
+    monkeypatch.setattr(client_module, "_RECONCILE_DELAYS", (0,))
+    recovered = client.refresh(job_id)
+    assert recovered.remote_job_id == f"remote-{job_id}"
     assert provider.upload_count == 1
     assert provider.create_count == 1
 

@@ -21,14 +21,17 @@ class SubmissionUncertainError(RuntimeError):
     pass
 
 
+_AUTO_RETRY_MARKER = "__batch_llm_auto_submission_retry_attempted__"
+_RECONCILE_DELAYS = (0, 1, 2, 4, 8)
+
+
 class BatchClient:
     """Crash-safe batch client for OpenAI and Gemini.
-
     Re-submission is conservative by design. If a process dies after the remote
     create call may have succeeded but before the returned job id was persisted,
-    the client first searches the provider for the deterministic local marker.
-    If it cannot prove whether a job exists, it leaves the job in SUBMITTING and
-    raises SubmissionUncertainError rather than creating a duplicate batch.
+    the client first searches the provider for the existing remote job. If none
+    appears after a short grace period, it automatically retries create once
+    using the persisted input file and will not retry again after another crash.
     """
 
     def __init__(
@@ -42,7 +45,6 @@ class BatchClient:
         self.store = Store(storage_path)
         self.lease_seconds = lease_seconds
         self.owner = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
-
         if isinstance(provider, str):
             name = provider.lower()
             if name == "openai":
@@ -99,7 +101,6 @@ class BatchClient:
             request_hash=request_hash,
             requests=requests,
         )
-
         if job.status.terminal or job.remote_job_id:
             return job
         return self._ensure_submitted(job.id)
@@ -115,13 +116,19 @@ class BatchClient:
             # Do not mistake an in-flight submission for a crashed one.
             if self.store.has_active_lease(job.id):
                 return job
-            job = self._reconcile_submission(job)
+            job = self._reconcile_submission(job, retry=True)
             if not job.remote_job_id:
-                raise SubmissionUncertainError(
-                    f"job {job.id} may have been submitted remotely but its remote id was not persisted; "
-                    "no matching remote job was found, so it will not be resubmitted automatically"
-                )
-
+                if job.error != _AUTO_RETRY_MARKER:
+                    # Persist the retry marker before create() so a second crash cannot loop forever.
+                    self.store.update_job(
+                        job.id, status=BatchStatus.PREPARING, error=_AUTO_RETRY_MARKER
+                    )
+                    job = self._ensure_submitted(job.id)
+                if not job.remote_job_id:
+                    raise SubmissionUncertainError(
+                        f"job {job.id} may have been submitted remotely but its remote id was not persisted; "
+                        "automatic recovery could not find or safely recreate the remote job"
+                    )
         if not job.remote_job_id or job.status.terminal:
             return job
 
@@ -216,10 +223,12 @@ class BatchClient:
             self.store.update_job(job.id, remote_file_id=remote_file_id)
 
         # A crash after this state transition may have created the remote job.
-        # Recovery must reconcile first and must never blindly create again.
+        # Recovery reconciles first and allows at most one persisted auto-retry.
         self.store.update_job(job.id, status=BatchStatus.SUBMITTING)
         remote_job_id = self.provider.create(job_id=job.id, model=job.model, file_id=remote_file_id)
-        self.store.update_job(job.id, remote_job_id=remote_job_id, status=BatchStatus.SUBMITTED)
+        self.store.update_job(
+            job.id, remote_job_id=remote_job_id, status=BatchStatus.SUBMITTED, error=None
+        )
         return self.store.get_job(job.id)
 
     @contextmanager
@@ -240,21 +249,28 @@ class BatchClient:
             stop.set()
             thread.join(timeout=interval + 1)
 
-    def _reconcile_submission(self, job: BatchJob) -> BatchJob:
+    def _reconcile_submission(self, job: BatchJob, *, retry: bool = False) -> BatchJob:
         if job.remote_job_id:
             return job
         if job.status != BatchStatus.SUBMITTING:
             return job
-        remote_job_id = self.provider.find_created_job(job_id=job.id)
-        # Fall back to the persisted input file when the remote batch id was lost.
-        if not remote_job_id and job.remote_file_id:
-            finder = getattr(self.provider, "find_created_job_by_file_id", None)
-            if callable(finder):
-                remote_job_id = finder(file_id=job.remote_file_id)
-            elif self.provider.name == "openai":
-                remote_job_id = self._find_openai_job_by_input_file(job.remote_file_id)
-        if remote_job_id:
-            self.store.update_job(job.id, remote_job_id=remote_job_id, status=BatchStatus.SUBMITTED)
+
+        delays = _RECONCILE_DELAYS if retry else (0,)
+        for delay in delays:
+            if delay:
+                time.sleep(delay)
+            remote_job_id = self.provider.find_created_job(job_id=job.id)
+            if not remote_job_id and job.remote_file_id:
+                finder = getattr(self.provider, "find_created_job_by_file_id", None)
+                if callable(finder):
+                    remote_job_id = finder(file_id=job.remote_file_id)
+                elif self.provider.name == "openai":
+                    remote_job_id = self._find_openai_job_by_input_file(job.remote_file_id)
+            if remote_job_id:
+                self.store.update_job(
+                    job.id, remote_job_id=remote_job_id, status=BatchStatus.SUBMITTED, error=None
+                )
+                break
         return self.store.get_job(job.id)
 
     def _find_openai_job_by_input_file(self, file_id: str) -> str | None:

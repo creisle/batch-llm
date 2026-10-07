@@ -135,7 +135,7 @@ For example:
 
 The contents of `system_prompt_file` are resolved before request/cache identity is calculated. The file path itself is not part of the cache key, so moving or renaming a prompt file without changing its contents does not invalidate cached results.
 
-The cache identity is calculated from the effective provider request: provider, model, resolved messages/system prompt, and provider-supported generation parameters. Options that batch-llm ignores before submission (such as `min_new_tokens`, `do_sample`, `use_cache`, and `truncation`) do not change cache identity. Provider aliases are normalized too, so equivalent options such as OpenAI `max_new_tokens` and `max_completion_tokens` share the same cache identity.
+The cache identity includes the provider, model, resolved messages/system prompt, and generation configuration. Changing any model request parameter therefore creates a distinct cached request.
 
 ## Credentials
 
@@ -274,10 +274,6 @@ When calculating token or cost totals, count each unique `usage_id` once.
 
 The complete raw provider response is also retained so additional usage fields introduced by providers remain available.
 
-### Provider errors
-
-If an individual provider request fails, the returned row preserves the raw provider error in `error` and adds a concise human-readable `error_message`. Provider failures are also logged with the local batch ID, remote batch ID, request ID, and provider error details. Successful requests from the same batch are still returned normally.
-
 Legacy caches migrated from an old multi-choice (`n > 1`) response cannot provide exact per-choice usage. Such usage is stored once with:
 
 ```text
@@ -294,11 +290,9 @@ Each exact provider/model/request/config combination has a deterministic local j
 
 Uploaded input-file IDs are also persisted and reused.
 
-Before remote batch creation, the job is persisted as `submitting`. If the process dies after the provider accepts the request but before the remote job ID is saved, recovery attempts to locate the existing provider job using its deterministic marker.
+Before remote batch creation, the job is persisted as `submitting`. If the process dies before the remote job ID is saved, recovery searches by the deterministic job marker and persisted input-file ID, retrying briefly in case the provider listing is delayed.
 
-If `batch-llm` cannot determine whether the provider accepted the submission, it raises `SubmissionUncertainError` rather than automatically resubmitting potentially expensive work.
-
-This is intentionally conservative: avoiding an unnecessary duplicate batch takes priority over automatic resubmission when the remote state is uncertain.
+If no remote job is found, `batch-llm` automatically retries creation once using the existing uploaded file. The retry marker is persisted so restarts do not repeatedly recreate the batch. If the submission is still uncertain after that retry, `SubmissionUncertainError` is raised.
 
 ## Concurrency
 
