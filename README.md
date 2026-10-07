@@ -325,31 +325,6 @@ job = client.wait(job)
 results = client.results(job)
 ```
 
-## Migrate an existing response cache
-
-A one-off migration utility is included for old SQLite caches using the `requests_cache_detailed` schema:
-
-```bash
-python scripts/migrate_legacy_cache.py /path/to/old-cache.sqlite
-```
-
-The migration builds a **fresh current-schema** batch-llm database. The old `requests_cache_detailed` table is used only as the source and is never copied into the destination. Cached request provenance is stored natively in `cache_requests`, and responses are written to `response_cache` using the current normalized cache identity.
-
-If the destination already exists, explicitly replace it only after the fresh migration succeeds:
-
-```bash
-python scripts/migrate_legacy_cache.py /path/to/old-cache.sqlite --overwrite
-```
-
-Or choose another destination:
-
-```bash
-python scripts/migrate_legacy_cache.py /path/to/old-cache.sqlite \
-  --destination /path/to/state.sqlite3
-```
-
-The migration reports progress for large databases. It preserves repeated cached responses and usage data. Multi-choice responses are split into independent cached samples. Because old `n > 1` usage applies to the original API call rather than an individual choice, it is stored once with `usage_scope="legacy_aggregate"` and a stable `usage_id`.
-
 ## Development
 
 Clone the repository and install the development environment with Poetry:
