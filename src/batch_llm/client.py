@@ -4,12 +4,13 @@ import hashlib
 import json
 import os
 import socket
+import threading
 import time
 import uuid
-import threading
+from collections.abc import Iterable
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .models import BatchJob, BatchResult, BatchStatus
 from .providers.base import Provider
@@ -245,9 +246,49 @@ class BatchClient:
         if job.status != BatchStatus.SUBMITTING:
             return job
         remote_job_id = self.provider.find_created_job(job_id=job.id)
+        # Fall back to the persisted input file when the remote batch id was lost.
+        if not remote_job_id and job.remote_file_id:
+            finder = getattr(self.provider, "find_created_job_by_file_id", None)
+            if callable(finder):
+                remote_job_id = finder(file_id=job.remote_file_id)
+            elif self.provider.name == "openai":
+                remote_job_id = self._find_openai_job_by_input_file(job.remote_file_id)
         if remote_job_id:
             self.store.update_job(job.id, remote_job_id=remote_job_id, status=BatchStatus.SUBMITTED)
         return self.store.get_job(job.id)
+
+    def _find_openai_job_by_input_file(self, file_id: str) -> str | None:
+        provider_client = getattr(self.provider, "client", None)
+        if provider_client is None:
+            provider_client = getattr(self.provider, "_client", None)
+        batches = getattr(provider_client, "batches", None)
+        list_batches = getattr(batches, "list", None)
+        if not callable(list_batches):
+            return None
+
+        matches: list[str] = []
+        page = list_batches(limit=100)
+        while page is not None:
+            data = getattr(page, "data", None)
+            if data is None:
+                data = list(page)
+            for batch in data:
+                input_file_id = getattr(batch, "input_file_id", None)
+                batch_id = getattr(batch, "id", None)
+                if input_file_id == file_id and batch_id and batch_id not in matches:
+                    matches.append(batch_id)
+            has_next_page = getattr(page, "has_next_page", None)
+            get_next_page = getattr(page, "get_next_page", None)
+            if not callable(has_next_page) or not has_next_page() or not callable(get_next_page):
+                break
+            page = get_next_page()
+
+        if len(matches) > 1:
+            raise SubmissionUncertainError(
+                f"multiple OpenAI batches use input file {file_id}; refusing to choose automatically: "
+                f"{', '.join(matches)}"
+            )
+        return matches[0] if matches else None
 
     @staticmethod
     def _hash_request(provider: str, model: str, requests: list[tuple[str, dict[str, Any]]]) -> str:

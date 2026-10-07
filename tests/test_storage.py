@@ -1,6 +1,5 @@
 from pathlib import Path
 
-from batch_llm.models import BatchStatus
 from batch_llm.storage import Store
 
 
@@ -196,3 +195,40 @@ def test_ensure_cache_requests_inserts_in_one_bulk_operation(tmp_path: Path):
         ("hash-1", "openai", {"value": 1}),
         ("hash-2", "gemini", {"value": 2}),
     ]
+
+
+def test_bulk_cache_helpers(tmp_path: Path):
+    store = Store(tmp_path / "state.sqlite3")
+    body1 = {"model": "m", "messages": [{"role": "user", "content": "one"}]}
+    body2 = {"model": "m", "messages": [{"role": "user", "content": "two"}]}
+
+    store.ensure_cache_requests([("k1", "openai", body1), ("k2", "openai", body2)])
+
+    store.add_cached_response(
+        "k1", {"value": 1}, {"total_tokens": 10}, usage_scope="request", usage_id="job:request-0"
+    )
+    store.add_cached_response("k1", {"value": 2})
+    store.add_cached_response("k2", {"value": 3})
+
+    # Include >900 keys so the SQLite chunking path is exercised.
+    keys = ["k1", "k2", *[f"missing-{i}" for i in range(901)]]
+    counts = store.cached_response_counts(keys)
+
+    assert counts["k1"] == 2
+    assert counts["k2"] == 1
+    assert counts["missing-0"] == 0
+    assert counts["missing-900"] == 0
+
+    rows = store.cached_responses_many(["k1", "k2"], limit_per_key=1)
+    assert [row.response["value"] for row in rows["k1"]] == [1]
+    assert [row.response["value"] for row in rows["k2"]] == [3]
+    assert rows["k1"][0].usage == {"total_tokens": 10}
+    assert rows["k1"][0].usage_scope == "request"
+    assert rows["k1"][0].usage_id == "job:request-0"
+
+    # The legacy single-key method is still a wrapper around the bulk method.
+    assert [row.response["value"] for row in store.cached_responses("k1")] == [1, 2]
+
+    assert store.cached_response_counts([]) == {}
+    assert store.cached_responses_many([]) == {}
+    assert store.cached_responses_many(["k1"], limit_per_key=0) == {"k1": []}

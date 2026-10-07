@@ -4,9 +4,10 @@ import json
 import os
 import sqlite3
 import time
+from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from platformdirs import user_cache_dir
 
@@ -106,7 +107,6 @@ class Store:
                 conn.execute("ALTER TABLE results ADD COLUMN usage TEXT")
             if "usage_scope" not in result_columns:
                 conn.execute("ALTER TABLE results ADD COLUMN usage_scope TEXT")
-
             cache_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(response_cache)")
             }
@@ -314,27 +314,58 @@ class Store:
                 rows,
             )
 
-    def cached_responses_many(self, request_hashes: list[str]) -> dict[str, list[BatchResult]]:
-        unique_hashes = list(dict.fromkeys(request_hashes))
-        if not unique_hashes:
-            return {}
-        rows_by_hash: dict[str, list[BatchResult]] = {key: [] for key in unique_hashes}
+    def cached_response_counts(self, request_hashes: list[str]) -> dict[str, int]:
+        keys = list(dict.fromkeys(request_hashes))
+        counts = {key: 0 for key in keys}
+        if not keys:
+            return counts
         with closing(self.connect()) as conn:
-            # Stay below SQLite builds that still use the traditional 999-variable limit.
-            for start in range(0, len(unique_hashes), 900):
-                chunk = unique_hashes[start : start + 900]
+            # Stay below SQLite's common parameter limit while keeping reads bulked.
+            for start in range(0, len(keys), 900):
+                chunk = keys[start : start + 900]
                 placeholders = ",".join("?" for _ in chunk)
                 rows = conn.execute(
                     f"""
-                    SELECT request_hash, sample_index, response, usage, usage_scope, usage_id
+                    SELECT request_hash, COUNT(*) AS response_count
                     FROM response_cache
                     WHERE request_hash IN ({placeholders})
-                    ORDER BY request_hash, sample_index
+                    GROUP BY request_hash
                     """,
                     chunk,
                 ).fetchall()
                 for row in rows:
-                    rows_by_hash[row["request_hash"]].append(
+                    counts[row["request_hash"]] = int(row["response_count"])
+        return counts
+
+    def cached_responses(self, request_hash: str) -> list[BatchResult]:
+        return self.cached_responses_many([request_hash]).get(request_hash, [])
+
+    def cached_responses_many(
+        self, request_hashes: list[str], *, limit_per_key: int | None = None
+    ) -> dict[str, list[BatchResult]]:
+        keys = list(dict.fromkeys(request_hashes))
+        results: dict[str, list[BatchResult]] = {key: [] for key in keys}
+        if not keys:
+            return results
+        if limit_per_key is not None and limit_per_key < 1:
+            return results
+        with closing(self.connect()) as conn:
+            for start in range(0, len(keys), 900):
+                chunk = keys[start : start + 900]
+                placeholders = ",".join("?" for _ in chunk)
+                sql = f"""
+                    SELECT request_hash, sample_index, response, usage, usage_scope, usage_id
+                    FROM response_cache
+                    WHERE request_hash IN ({placeholders})
+                """
+                params: list[Any] = list(chunk)
+                if limit_per_key is not None:
+                    sql += " AND sample_index < ?"
+                    params.append(limit_per_key)
+                sql += " ORDER BY request_hash, sample_index"
+                rows = conn.execute(sql, params).fetchall()
+                for row in rows:
+                    results[row["request_hash"]].append(
                         BatchResult(
                             custom_id=f"cache-{row['sample_index']}",
                             response=json.loads(row["response"]),
@@ -343,10 +374,7 @@ class Store:
                             usage_id=row["usage_id"],
                         )
                     )
-        return rows_by_hash
-
-    def cached_responses(self, request_hash: str) -> list[BatchResult]:
-        return self.cached_responses_many([request_hash])[request_hash]
+        return results
 
     def add_cached_response(
         self,

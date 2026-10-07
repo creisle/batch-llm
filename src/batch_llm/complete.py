@@ -9,8 +9,8 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Literal
 
-from .client import BatchClient
 from .cache import request_cache_hash
+from .client import BatchClient
 from .request_identity import effective_request_body, ignored_generation_keys
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,6 @@ def load_generation_config(config: GenerationConfig) -> dict[str, Any]:
         raise TypeError("generation must be a mapping")
     else:
         loaded["generation"] = dict(generation)
-
     system_prompt = loaded.get("system_prompt")
     prompt_file = loaded.get("system_prompt_file")
     if system_prompt is not None and prompt_file is not None:
@@ -177,35 +176,46 @@ def complete_prompts(
         messages.append({"role": "user", "content": prompt})
         return {"model": model, "messages": messages, **generation}
 
-    request_info: list[tuple[str, str, dict[str, Any]]] = []
+    request_info: dict[str, tuple[str, dict[str, Any]]] = {}
     for prompt in unique_prompts:
-        effective_body = effective_request_body(provider, request_body(prompt))
-        cache_key = request_cache_hash(provider, effective_body)
-        request_info.append((prompt, cache_key, effective_body))
-
-    cached_by_key = client.store.cached_responses_many(
-        [cache_key for _, cache_key, _ in request_info]
-    )
-    by_prompt: dict[str, list[Any]] = {}
+        body = effective_request_body(provider, request_body(prompt))
+        request_info[prompt] = (request_cache_hash(provider, body), body)
+    cache_keys = list(dict.fromkeys(key for key, _ in request_info.values()))
+    # Read cached responses once and reuse them for hit counts and final output.
+    if hasattr(client.store, "cached_responses_many"):
+        cached = client.store.cached_responses_many(cache_keys)
+        cached_by_key = {key: list(cached.get(key, []))[:min_repeat] for key in cache_keys}
+    else:
+        cached_by_key = {key: client.store.cached_responses(key)[:min_repeat] for key in cache_keys}
+    cached_counts = {key: len(cached_by_key[key]) for key in cache_keys}
     missing_prompts: list[str] = []
     missing_keys: list[str] = []
-    missing_cache_requests: dict[str, tuple[str, str, dict[str, Any]]] = {}
-    for prompt, cache_key, effective_body in request_info:
-        cached = cached_by_key.get(cache_key, [])[:min_repeat]
-        by_prompt[prompt] = list(cached)
-        for _ in range(min_repeat - len(cached)):
+    for prompt in unique_prompts:
+        cache_key, _ = request_info[prompt]
+        for _ in range(max(0, min_repeat - cached_counts.get(cache_key, 0))):
             missing_prompts.append(prompt)
             missing_keys.append(cache_key)
-        if len(cached) < min_repeat:
-            missing_cache_requests.setdefault(cache_key, (cache_key, provider, effective_body))
-    if missing_cache_requests:
-        client.store.ensure_cache_requests(list(missing_cache_requests.values()))
-
+    if missing_prompts:
+        missing_request_rows = list(
+            {
+                key: (key, provider, request_info[prompt][1])
+                for prompt, key in zip(missing_prompts, missing_keys)
+            }.values()
+        )
+        if hasattr(client.store, "ensure_cache_requests"):
+            client.store.ensure_cache_requests(missing_request_rows)
+        else:
+            for key, request_provider, body in missing_request_rows:
+                client.store.ensure_cache_request(key, request_provider, body)
     job = None
     if missing_prompts:
         job = client.submit(
             missing_prompts, model=model, generation=generation, system_prompt=system_prompt
         )
+    by_prompt: dict[str, list[Any]] = {
+        prompt: list(cached_by_key.get(request_info[prompt][0], [])) for prompt in unique_prompts
+    }
+    if job is not None:
         wait_started = time.monotonic()
         job = client.wait(job, poll_interval=wait_interval_s, timeout=total_wait_s)
         if not job.completed:

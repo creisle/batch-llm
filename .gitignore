@@ -8,3 +8,5 @@ tarball_pkg.sh
 .venv
 scripts/migrate_legacy_cache.py
 .pytest_cache
+.vscode
+/*.zip
