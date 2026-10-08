@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from .cache import request_cache_hash
 from .client import BatchClient
+from .models import BatchResult
 from .request_identity import effective_request_body, ignored_generation_keys
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,7 @@ def complete_prompts(
     total_wait_s: float | None = 30 * 15,
     cache_dir: str | os.PathLike[str] | None = None,
     provider: str | None = None,
+    force_refresh: bool = False,
 ) -> list[dict[str, Any]]:
     """Complete prompts using the provider batch API.
 
@@ -122,6 +124,10 @@ def complete_prompts(
     the returned rows.
 
     ``generation_config`` may be a JSON filename or a mapping.
+
+    ``force_refresh=True`` submits a new batch for every unique prompt, with
+    ``min_repeat`` samples each. Successful samples replace existing cached
+    samples for that request; if none succeed, its old cache is preserved.
 
     Identical work is persisted in SQLite and resumed across process restarts.
     A submission whose remote state cannot be proven after a crash is never
@@ -182,7 +188,9 @@ def complete_prompts(
         request_info[prompt] = (request_cache_hash(provider, body), body)
     cache_keys = list(dict.fromkeys(key for key, _ in request_info.values()))
     # Read cached responses once and reuse them for hit counts and final output.
-    if hasattr(client.store, "cached_responses_many"):
+    if force_refresh:
+        cached_by_key = {key: [] for key in cache_keys}
+    elif hasattr(client.store, "cached_responses_many"):
         cached = client.store.cached_responses_many(cache_keys)
         cached_by_key = {key: list(cached.get(key, []))[:min_repeat] for key in cache_keys}
     else:
@@ -209,8 +217,13 @@ def complete_prompts(
                 client.store.ensure_cache_request(key, request_provider, body)
     job = None
     if missing_prompts:
+        submit_options = {"force_refresh": True} if force_refresh else {}
         job = client.submit(
-            missing_prompts, model=model, generation=generation, system_prompt=system_prompt
+            missing_prompts,
+            model=model,
+            generation=generation,
+            system_prompt=system_prompt,
+            **submit_options,
         )
     by_prompt: dict[str, list[Any]] = {
         prompt: list(cached_by_key.get(request_info[prompt][0], [])) for prompt in unique_prompts
@@ -247,6 +260,7 @@ def complete_prompts(
                 )
             time.sleep(wait_interval_s)
 
+        refreshed_by_key: dict[str, list[BatchResult]] = {}
         for prompt, cache_key, result in zip(missing_prompts, missing_keys, batch_results):
             by_prompt[prompt].append(result)
             if result.error is not None:
@@ -259,14 +273,26 @@ def complete_prompts(
                     _format_provider_error(result.error),
                 )
             if result.response is not None and result.error is None:
-                client.store.add_cached_response(
-                    cache_key,
-                    result.response,
-                    result.usage or _usage(result.response, provider),
+                cached_result = BatchResult(
+                    custom_id=result.custom_id,
+                    response=result.response,
+                    usage=result.usage or _usage(result.response, provider),
                     usage_scope=result.usage_scope or ("request" if result.usage else None),
                     usage_id=result.usage_id
                     or (f"{job.id}:{result.custom_id}" if result.usage is not None else None),
                 )
+                if force_refresh:
+                    refreshed_by_key.setdefault(cache_key, []).append(cached_result)
+                else:
+                    client.store.add_cached_response(
+                        cache_key,
+                        cached_result.response,
+                        cached_result.usage,
+                        usage_scope=cached_result.usage_scope,
+                        usage_id=cached_result.usage_id,
+                    )
+        for cache_key, results in refreshed_by_key.items():
+            client.store.replace_cached_responses(cache_key, results)
 
     config_json = json.dumps(cfg, sort_keys=True, default=str)
     output: list[dict[str, Any]] = []

@@ -408,6 +408,35 @@ class Store:
             )
             return int(next_index)
 
+    def replace_cached_responses(self, request_hash: str, results: list[BatchResult]) -> None:
+        """Atomically replace a request's samples with successful results."""
+        rows = [
+            (
+                request_hash,
+                index,
+                json.dumps(result.response, sort_keys=True),
+                json.dumps(result.usage, sort_keys=True) if result.usage is not None else None,
+                result.usage_scope or ("request" if result.usage is not None else None),
+                result.usage_id,
+            )
+            for index, result in enumerate(
+                result for result in results if result.response is not None and result.error is None
+            )
+        ]
+        if not rows:
+            return
+        with self.immediate() as conn:
+            conn.execute("DELETE FROM response_cache WHERE request_hash = ?", (request_hash,))
+            conn.executemany(
+                """
+                INSERT INTO response_cache(
+                    request_hash, sample_index, response, usage, usage_scope, usage_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+
     def results(self, job_id: str) -> list[BatchResult]:
         with closing(self.connect()) as conn:
             rows = conn.execute(

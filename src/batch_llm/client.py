@@ -71,7 +71,9 @@ class BatchClient:
         model: str,
         generation: dict[str, Any] | None = None,
         system_prompt: str | None = None,
+        force_refresh: bool = False,
     ) -> BatchJob:
+        """Submit or resume a batch; ``force_refresh`` always creates a new job."""
         if isinstance(prompts, str):
             prompts = [prompts]
         prompts = list(prompts)
@@ -92,6 +94,8 @@ class BatchClient:
             (custom_id, self.provider.cache_identity_body(body)) for custom_id, body in requests
         ]
         request_hash = self._hash_request(self.provider.name, model, identity_requests)
+        if force_refresh:
+            request_hash = hashlib.sha256(f"{request_hash}:{uuid.uuid4().hex}".encode()).hexdigest()
         job_id = request_hash[:32]
         job = self.store.create_or_get_job(
             job_id=job_id,

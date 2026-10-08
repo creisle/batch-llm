@@ -57,6 +57,19 @@ results = complete_prompts(
 
 For example, if one call completes 100 prompts and a later call contains 100 prompts of which 50 are already cached, only the remaining 50 are submitted.
 
+Pass `force_refresh=True` to submit a new batch for all unique prompts, even when cached responses or earlier batch jobs exist:
+
+```python
+results = complete_prompts(
+    ["first prompt", "second prompt"],
+    model="gpt-5.6",
+    generation_config={"temperature": 0},
+    force_refresh=True,
+)
+```
+
+Each unique prompt gets `min_repeat` fresh samples. Successful results atomically replace its cached samples, including their usage metadata, so later calls reuse the refreshed responses. Duplicate input prompts still share samples. Failed requests are returned as errors; if no samples succeed for a prompt, its previous cache is preserved. Each call with `force_refresh=True` starts a new job.
+
 ## Inputs
 
 The input can be a single string:

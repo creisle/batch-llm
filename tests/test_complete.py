@@ -171,11 +171,7 @@ def test_reconcile_submission_recovers_by_provider_file_id():
     assert client.store.updates == [
         (
             "local-job",
-            {
-                "remote_job_id": "batch-recovered",
-                "status": BatchStatus.SUBMITTED,
-                "error": None,
-            },
+            {"remote_job_id": "batch-recovered", "status": BatchStatus.SUBMITTED, "error": None},
         )
     ]
 
